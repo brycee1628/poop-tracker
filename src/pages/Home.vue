@@ -2,32 +2,37 @@
     <div class="container">
         <h1>💩 大便次數排行榜 💩</h1>
 
-        <div v-for="(count, name) in poopData" :key="name" class="card">
-            <h2>{{ name }}</h2>
+        <div v-for="({ name, count }, index) in sortedPoopList" :key="name" class="card"
+            :class="{ first: index === 0 }">
+            <h2>
+                第{{ index + 1 }}名
+                <span v-if="index === 0">👑</span>
+                {{ name }}
+            </h2>
             <p>{{ count }} 次</p>
         </div>
     </div>
 </template>
 
 <script setup>
-import { reactive, onMounted } from 'vue';
+import { reactive, onMounted, computed } from 'vue';
 import { database, ref, onValue } from '../firebase';
 
-// 資料綁定
 const poopData = reactive({});
 
-// 監聽 poopCounter
+const sortedPoopList = computed(() => {
+    return Object.entries(poopData)
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => b.count - a.count);
+});
+
 const poopRef = ref(database, 'poopCounter');
 
 onMounted(() => {
     onValue(poopRef, (snapshot) => {
         const data = snapshot.val() || {};
-
-        // 🔧 清空
         Object.keys(poopData).forEach((key) => delete poopData[key]);
-
-        // 重新塞入最新資料
-        Object.keys(data).forEach(name => {
+        Object.keys(data).forEach((name) => {
             poopData[name] = data[name];
         });
     });
@@ -46,5 +51,25 @@ onMounted(() => {
     padding: 16px;
     margin: 12px 0;
     border-radius: 8px;
+    transition: transform 0.3s ease;
+}
+
+/* 🌟 第一名特效 */
+.card.first {
+    background: linear-gradient(135deg, #ffe082, #fff8e1);
+    box-shadow: 0 0 20px gold;
+    transform: scale(1.03);
+}
+
+.card.first h2 {
+    font-size: 1.8em;
+    font-weight: bold;
+    color: #e65100;
+}
+
+.card.first p {
+    font-size: 1.3em;
+    font-weight: 600;
+    color: #6d4c41;
 }
 </style>
