@@ -9,7 +9,7 @@
             </option>
         </select>
 
-        <div v-if="historyData.length" class="history-list">
+        <div v-if="sortedHistory.length" class="history-list">
             <div v-for="({ name, count }, index) in sortedHistory" :key="name" class="card"
                 :class="{ first: index === 0 }">
                 <h2>{{ index + 1 }}. <span v-if="index === 0">👑</span> {{ name }}</h2>
@@ -30,6 +30,7 @@ const availableMonths = ref([]);
 const historyData = ref({});
 
 const sortedHistory = computed(() => {
+    // 確保我們有正確的資料格式
     return Object.entries(historyData.value)
         .map(([name, count]) => ({ name, count }))
         .sort((a, b) => b.count - a.count);
@@ -40,18 +41,20 @@ function fetchHistory() {
 
     const monthRef = dbRef(database, `monthlyHistory/${selectedMonth.value}`);
     onValue(monthRef, (snapshot) => {
-        historyData.value = snapshot.val() || {};
+        const data = snapshot.val() || {};
+        console.log("Fetched data:", data); // 這裡檢查資料是否正確
+        historyData.value = data;
     });
 }
 
 onMounted(() => {
-    // 你可以改為從 Firebase 撈 key，但這裡手動示範
-    availableMonths.value = [
-        '2024-03',
-        '2024-04',
-        '2024-05',
-        '2024-06',
-    ];
+    const monthsRef = dbRef(database, 'monthlyHistory');
+    onValue(monthsRef, (snapshot) => {
+        const months = snapshot.val();
+        if (months) {
+            availableMonths.value = Object.keys(months).sort().reverse();
+        }
+    });
 });
 </script>
 
