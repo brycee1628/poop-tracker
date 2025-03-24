@@ -70,108 +70,26 @@ onMounted(() => {
 
 .card {
     border: 1px solid #ccc;
-    padding: 20px;
-    /* 增加內邊距 */
-    margin: 20px 0;
-    /* 增加卡片之間的距離 */
+    padding: 16px;
+    margin: 12px 0;
     border-radius: 8px;
-    transition: transform 0.3s ease;
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-    /* 微妙的陰影效果 */
 }
 
-/* 🌟 第一名特效 */
 .card.first {
     background: linear-gradient(135deg, #ffe082, #fff8e1);
-    box-shadow:
-        0 0 40px gold,
-        0 0 50px orange,
-        0 0 60px red,
-        0 0 80px rgba(255, 69, 0, 0.8),
-        0 0 100px rgba(255, 69, 0, 0.7),
-        0 0 120px rgba(255, 165, 0, 0.8);
-    /* 更多層次的火焰陰影 */
-    transform: scale(1.05);
-    /* 更大一點的縮放效果 */
-    animation: flame 1s ease-in-out infinite;
-    /* 更強烈的火焰動畫 */
-}
-
-/* 火焰動畫效果 */
-@keyframes flame {
-    0% {
-        box-shadow:
-            0 0 40px gold,
-            0 0 50px orange,
-            0 0 60px red,
-            0 0 80px rgba(255, 69, 0, 0.8),
-            0 0 100px rgba(255, 69, 0, 0.7),
-            0 0 120px rgba(255, 165, 0, 0.8);
-        transform: scale(1.05);
-    }
-
-    25% {
-        box-shadow:
-            0 0 50px gold,
-            0 0 70px orange,
-            0 0 90px red,
-            0 0 110px rgba(255, 69, 0, 0.9),
-            0 0 140px rgba(255, 165, 0, 1);
-        transform: scale(1.07);
-        /* 增加縮放效果 */
-    }
-
-    50% {
-        box-shadow:
-            0 0 70px gold,
-            0 0 90px orange,
-            0 0 120px red,
-            0 0 150px rgba(255, 69, 0, 1),
-            0 0 180px rgba(255, 165, 0, 1);
-        transform: scale(1.1);
-        /* 最強的縮放效果 */
-    }
-
-    75% {
-        box-shadow:
-            0 0 50px gold,
-            0 0 70px orange,
-            0 0 90px red,
-            0 0 110px rgba(255, 69, 0, 0.8),
-            0 0 140px rgba(255, 165, 0, 0.9);
-        transform: scale(1.07);
-        /* 縮放稍微回縮 */
-    }
-
-    100% {
-        box-shadow:
-            0 0 40px gold,
-            0 0 50px orange,
-            0 0 60px red,
-            0 0 80px rgba(255, 69, 0, 0.8),
-            0 0 100px rgba(255, 69, 0, 0.7),
-            0 0 120px rgba(255, 165, 0, 0.8);
-        transform: scale(1.05);
-        /* 恢復到初始縮放效果 */
-    }
+    box-shadow: 0 0 20px gold;
+    transform: scale(1.03);
 }
 
 .card.first h2 {
-    font-size: 2em;
-    /* 更大的字型 */
+    font-size: 1.8em;
     font-weight: bold;
-    color: #ff4500;
-    /* 更加亮眼的火紅色 */
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
-    /* 文字添加陰影 */
+    color: #e65100;
 }
 
 .card.first p {
-    font-size: 1.5em;
-    /* 更大的字型 */
+    font-size: 1.3em;
     font-weight: 600;
     color: #6d4c41;
-    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.2);
-    /* 文字添加陰影 */
 }
 </style>

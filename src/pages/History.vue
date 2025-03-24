@@ -12,7 +12,7 @@
         <div v-if="sortedHistory.length" class="history-list">
             <div v-for="({ name, count }, index) in sortedHistory" :key="name" class="card"
                 :class="{ first: index === 0 }">
-                <h2>{{ index + 1 }}. <span v-if="index === 0">👑</span> {{ name }}</h2>
+                <h2>第{{ index + 1 }}名 <span v-if="index === 0">👑</span> {{ name }}</h2>
                 <p>{{ count }} 次</p>
             </div>
         </div>
