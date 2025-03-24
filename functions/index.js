@@ -59,8 +59,8 @@ exports.monthlyReset = onSchedule(
   }
 );
 
-// ✅ 手動測試 monthlyReset（可從瀏覽器觸發）
-exports.testMonthlyReset = functions.https.onRequest(async (req, res) => {
-  await exports.monthlyReset.run();
-  res.send("✅ monthlyReset 手動觸發完成！");
-});
+// // ✅ 手動測試 monthlyReset（可從瀏覽器觸發）
+// exports.testMonthlyReset = functions.https.onRequest(async (req, res) => {
+//   await exports.monthlyReset.run();
+//   res.send("✅ monthlyReset 手動觸發完成！");
+// });
