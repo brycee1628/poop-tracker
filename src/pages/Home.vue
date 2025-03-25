@@ -101,7 +101,7 @@ onMounted(() => {
     padding-left: 100%;
     white-space: nowrap;
     animation: scroll-left 15s linear infinite;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: bold;
     color: #e65100;
 }
