@@ -92,29 +92,42 @@ onMounted(() => {
     position: relative;
     width: 100%;
     overflow: hidden;
-    height: 2em; /* 固定高度避免跳動 */
+    height: 2em;
     margin-bottom: 20px;
 }
 
 .marquee span {
     display: inline-block;
-    padding-left: 100%;
+    min-width: 100%; /* ⭐ 保證不會太小，也能適應不同寬度 */
     white-space: nowrap;
     animation: scroll-left 15s linear infinite;
-    font-size: 13px;
+    font-size: 1em; /* ⭐ 改用相對單位，適應手機縮放 */
     font-weight: bold;
     color: #e65100;
 }
 
 @keyframes scroll-left {
     0% {
-        transform: translateX(0);
+        transform: translateX(100%);
     }
     100% {
         transform: translateX(-100%);
     }
 }
 
+@media (max-width: 480px) {
+    .marquee span {
+        font-size: 0.9em;
+    }
+
+    .card h2 {
+        font-size: 1.2em;
+    }
+
+    .card p {
+        font-size: 1em;
+    }
+}
 
 .card {
     border: 1px solid #ccc;
