@@ -2,6 +2,10 @@
     <div class="container">
         <h1>💩 大便次數排行榜 💩</h1>
         <p class="subtitle">讓我們一起譜寫歷屎 📖</p>
+        <p class="total">經過大家的努力，總共創造了{{ totalCount }}次歷💩囉</p>
+        <div v-if="topPooper" class="marquee">
+            <span>榜一{{ topPooper.name }}: 吾乃歷💩名將，誰敢與我一爭？不服來戰！</span>
+        </div>
 
         <div v-for="({ name, count }, index) in sortedPoopList" :key="name" class="card"
             :class="{ first: index === 0 }">
@@ -27,6 +31,15 @@ const sortedPoopList = computed(() => {
         .map(([name, count]) => ({ name, count }))
         .sort((a, b) => b.count - a.count);
 });
+
+const totalCount = computed(() => {
+    return Object.values(poopData).reduce((sum, count) => sum + count, 0);
+});
+
+const topPooper = computed(() => {
+    return sortedPoopList.value.length > 0 ? sortedPoopList.value[0] : null;
+});
+
 
 const poopRef = ref(database, 'poopCounter');
 
@@ -67,6 +80,41 @@ onMounted(() => {
     padding: 20px;
     /* 增加內邊距 */
 }
+
+.total {
+    font-size: 1.2em;
+    color: #444;
+    margin-bottom: 20px;
+    font-weight: 500;
+}
+
+.marquee {
+    position: relative;
+    width: 100%;
+    overflow: hidden;
+    height: 2em; /* 固定高度避免跳動 */
+    margin-bottom: 20px;
+}
+
+.marquee span {
+    display: inline-block;
+    padding-left: 100%;
+    white-space: nowrap;
+    animation: scroll-left 15s linear infinite;
+    font-size: 14px;
+    font-weight: bold;
+    color: #e65100;
+}
+
+@keyframes scroll-left {
+    0% {
+        transform: translateX(0);
+    }
+    100% {
+        transform: translateX(-100%);
+    }
+}
+
 
 .card {
     border: 1px solid #ccc;
