@@ -1,8 +1,8 @@
 <template>
     <div class="container">
-        <h1>💩 大便次數排行榜 💩</h1>
+        <h1>💩 排行榜 💩</h1>
         <p class="subtitle">讓我們一起譜寫歷屎 📖</p>
-        <p class="total">經過大家的努力，總共創造了{{ totalCount }}次歷💩囉</p>
+        <p class="total">當前魔力濃度 {{ totalCount }}</p>
         <div v-if="topPooper" class="marquee">
             <span>榜一{{ topPooper.name }}: 吾乃歷💩名將，誰敢與我一爭？不服來戰！</span>
         </div>
