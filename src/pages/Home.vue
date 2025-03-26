@@ -4,7 +4,7 @@
         <p class="subtitle">讓我們一起譜寫歷屎 📖</p>
         <p class="total">當前魔力濃度 {{ totalCount }}</p>
         <div v-if="topPooper" class="marquee">
-            <span>榜一{{ topPooper.name }}: 吾乃歷💩名將，誰敢與我一爭？不服來戰！</span>
+            <span>榜一{{ topPooper.name }}: 吾乃歷💩名將，誰敢與我一爭？不服來💩！</span>
         </div>
 
         <div v-for="({ name, count }, index) in sortedPoopList" :key="name" class="card"
