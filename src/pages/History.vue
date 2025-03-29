@@ -1,7 +1,14 @@
 <template>
     <div class="container">
-        <h1>📅 歷屎排行榜</h1>
-        <p class="subtitle">看看過去誰稱霸💩界！</p>
+        <h1>💩屎記💩</h1>
+        <p class="subtitle">承載著我們消失於漩渦的一切。</p>
+        <p class="description">
+            每一次沖水，都是一次送行。<br>
+            任它在漩渦中消失，彷彿從未存在。<br><br>
+
+            但屎記，會記得。<br>
+            為每一次努力，寫下歷屎。<br>
+        </p>
 
         <select v-model="selectedMonth" @change="fetchHistory">
             <option v-for="month in availableMonths" :key="month" :value="month">
@@ -70,6 +77,23 @@ onMounted(() => {
     color: #666;
     margin-bottom: 20px;
     font-style: italic;
+}
+
+.description {
+    font-size: 1.1em;
+    line-height: 1.8;
+    color: #4a3f35;
+    /* 深褐灰，溫潤感 */
+    background-color: #fdfaf7;
+    /* 淡米色，像廁紙一樣柔和 */
+    padding: 20px;
+    border-left: 4px solid #d6c2a1;
+    /* 仿古書頁邊線感 */
+    border-radius: 8px;
+    max-width: 600px;
+    margin: 0 auto 30px auto;
+    font-family: 'Georgia', serif;
+    /* 讓它有一點書寫感 */
 }
 
 select {
