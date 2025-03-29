@@ -46,9 +46,15 @@ const poopRef = ref(database, 'poopCounter');
 onMounted(() => {
     onValue(poopRef, (snapshot) => {
         const data = snapshot.val() || {};
-        Object.keys(poopData).forEach((key) => delete poopData[key]);
-        Object.keys(data).forEach((name) => {
-            poopData[name] = data[name];
+        // 優化數據處理方式，避免不必要的刪除和重新創建
+        Object.keys(poopData).forEach(key => {
+            if (!(key in data)) {
+                delete poopData[key];
+            }
+        });
+
+        Object.entries(data).forEach(([key, value]) => {
+            poopData[key] = value;
         });
     });
 });
@@ -98,18 +104,28 @@ onMounted(() => {
 
 .marquee span {
     display: inline-block;
-    min-width: 100%; /* ⭐ 保證不會太小，也能適應不同寬度 */
+    min-width: 100%;
+    /* ⭐ 保證不會太小，也能適應不同寬度 */
     white-space: nowrap;
     animation: scroll-left 15s linear infinite;
-    font-size: 1em; /* ⭐ 改用相對單位，適應手機縮放 */
+    font-size: 1em;
+    /* ⭐ 改用相對單位，適應手機縮放 */
     font-weight: bold;
     color: #e65100;
+}
+
+/* 添加滑鼠懸停時暫停滾動效果 */
+@media (hover: hover) {
+    .marquee:hover span {
+        animation-play-state: paused;
+    }
 }
 
 @keyframes scroll-left {
     0% {
         transform: translateX(100%);
     }
+
     100% {
         transform: translateX(-100%);
     }
@@ -134,12 +150,23 @@ onMounted(() => {
     padding: 16px;
     margin: 12px 0;
     border-radius: 8px;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    /* 添加過渡效果 */
+}
+
+.card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
 }
 
 .card.first {
     background: linear-gradient(135deg, #ffe082, #fff8e1);
     box-shadow: 0 0 20px gold;
     transform: scale(1.03);
+}
+
+.card.first:hover {
+    transform: scale(1.05);
 }
 
 .card.first h2 {
