@@ -49,7 +49,7 @@ function fetchHistory() {
     const monthRef = dbRef(database, `monthlyHistory/${selectedMonth.value}`);
     onValue(monthRef, (snapshot) => {
         const data = snapshot.val() || {};
-        console.log("Fetched data:", data); // 這裡檢查資料是否正確
+        // console.log("Fetched data:", data); // 這裡檢查資料是否正確
         historyData.value = data;
     });
 }

@@ -2,7 +2,7 @@
     <div class="container">
         <h1>💩 排行榜 💩</h1>
         <p class="subtitle">讓我們一起譜寫歷屎 📖</p>
-        <p class="total">當前魔力濃度 {{ totalCount }}</p>
+        <p class="total">魔力濃度 {{ totalAllCount }}</p>
         <div v-if="topPooper" class="marquee">
             <span>榜一{{ topPooper.name }}: 吾乃歷💩名將，誰敢與我一爭？不服來💩！</span>
         </div>
@@ -21,10 +21,11 @@
 
 
 <script setup>
-import { reactive, onMounted, computed } from 'vue';
-import { database, ref, onValue } from '../firebase';
+import { reactive, onMounted, computed, ref as vueRef } from 'vue';
+import { database, ref, onValue, get } from '../firebase';
 
 const poopData = reactive({});
+const historicalTotal = vueRef(0);
 
 const sortedPoopList = computed(() => {
     return Object.entries(poopData)
@@ -36,14 +37,37 @@ const totalCount = computed(() => {
     return Object.values(poopData).reduce((sum, count) => sum + count, 0);
 });
 
+const totalAllCount = computed(() => {
+    return totalCount.value + historicalTotal.value;
+});
+
 const topPooper = computed(() => {
     return sortedPoopList.value.length > 0 ? sortedPoopList.value[0] : null;
 });
 
+// 獲取歷史數據總和
+const fetchHistoricalTotal = async () => {
+    const historyRef = ref(database, 'monthlyHistory');
+    const snapshot = await get(historyRef);
+    const historyData = snapshot.val() || {};
+
+    let total = 0;
+
+    // 遍歷每個月份
+    Object.values(historyData).forEach(monthData => {
+        // 遍歷每個月份中的每個人的數據
+        Object.values(monthData).forEach(count => {
+            total += count;
+        });
+    });
+
+    historicalTotal.value = total;
+};
 
 const poopRef = ref(database, 'poopCounter');
 
 onMounted(() => {
+    // 獲取當前月份數據
     onValue(poopRef, (snapshot) => {
         const data = snapshot.val() || {};
         // 優化數據處理方式，避免不必要的刪除和重新創建
@@ -57,6 +81,9 @@ onMounted(() => {
             poopData[key] = value;
         });
     });
+
+    // 獲取歷史數據總和
+    fetchHistoricalTotal();
 });
 </script>
 
@@ -92,6 +119,12 @@ onMounted(() => {
     color: #444;
     margin-bottom: 20px;
     font-weight: 500;
+}
+
+.total-all {
+    font-size: 0.9em;
+    color: #666;
+    margin-left: 5px;
 }
 
 .marquee {
