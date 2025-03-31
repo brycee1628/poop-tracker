@@ -36,10 +36,9 @@ exports.monthlyReset = onSchedule(
   },
   async () => {
     const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth();
-    const monthString = String(month === 0 ? 12 : month).padStart(2, "0");
-    const backupYear = month === 0 ? year - 1 : year;
+    const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const backupYear = lastMonthDate.getFullYear();
+    const monthString = String(lastMonthDate.getMonth() + 1).padStart(2, "0");
 
     const poopRef = db.ref("poopCounter");
     const snapshot = await poopRef.once("value");
@@ -58,6 +57,7 @@ exports.monthlyReset = onSchedule(
     return null;
   }
 );
+
 
 // // ✅ 手動測試 monthlyReset（可從瀏覽器觸發）
 // exports.testMonthlyReset = functions.https.onRequest(async (req, res) => {

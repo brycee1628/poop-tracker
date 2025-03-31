@@ -54,12 +54,32 @@ function fetchHistory() {
     });
 }
 
+// 獲取上個月的年月
+function getPreviousMonth() {
+    const now = new Date();
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const year = lastMonth.getFullYear();
+    const month = String(lastMonth.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
+}
+
 onMounted(() => {
     const monthsRef = dbRef(database, 'monthlyHistory');
     onValue(monthsRef, (snapshot) => {
         const months = snapshot.val();
         if (months) {
             availableMonths.value = Object.keys(months).sort().reverse();
+
+            // 設置預設月份為上個月或最新的一個月
+            const previousMonth = getPreviousMonth();
+            if (availableMonths.value.includes(previousMonth)) {
+                selectedMonth.value = previousMonth;
+            } else if (availableMonths.value.length > 0) {
+                selectedMonth.value = availableMonths.value[0]; // 最新的月份
+            }
+
+            // 自動獲取選定月份的歷史數據
+            fetchHistory();
         }
     });
 });
