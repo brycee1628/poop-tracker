@@ -2,7 +2,7 @@
     <div class="container">
         <h1>💩 排行榜 💩</h1>
         <p class="subtitle">讓我們一起譜寫歷屎 📖</p>
-        <p class="total">魔力濃度 {{ totalAllCount }}</p>
+        <p class="total">當前魔力濃度 {{ totalAllCount }}</p>
         <div v-if="topPooper" class="marquee">
             <span>榜一{{ topPooper.name }}: 吾乃歷💩名將，誰敢與我一爭？不服來💩！</span>
         </div>
