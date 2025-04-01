@@ -4,7 +4,7 @@
         <p class="subtitle">讓我們一起譜寫歷屎 📖</p>
         <p class="total">當前魔力濃度 {{ totalAllCount }}</p>
         <div v-if="topPooper" class="marquee">
-            <span>榜一{{ topPooper.name }}: 吾乃歷💩名將，誰敢與我一爭？不服來💩！</span>
+            <span>{{ randomMarqueeText }}</span>
         </div>
 
         <div v-for="({ name, count }, index) in sortedPoopList" :key="name" class="card"
@@ -26,6 +26,12 @@ import { database, ref, onValue, get } from '../firebase';
 
 const poopData = reactive({});
 const historicalTotal = vueRef(0);
+const randomMarqueeText = vueRef('');
+
+const marqueeTexts = [
+    (name) => `榜一${name}: 吾乃歷💩名將，誰敢與我一爭？不服來💩！`,
+    (name) => `榜一${name}：屎間還很多，我可以等你。`
+];
 
 const sortedPoopList = computed(() => {
     return Object.entries(poopData)
@@ -42,8 +48,20 @@ const totalAllCount = computed(() => {
 });
 
 const topPooper = computed(() => {
-    return sortedPoopList.value.length > 0 ? sortedPoopList.value[0] : null;
+    if (sortedPoopList.value.length > 0) {
+        const top = sortedPoopList.value[0];
+        // 當排行榜資料更新時，隨機選擇一條跑馬燈文字
+        updateRandomMarqueeText(top.name);
+        return top;
+    }
+    return null;
 });
+
+// 更新隨機跑馬燈文字
+function updateRandomMarqueeText(name) {
+    const randomIndex = Math.floor(Math.random() * marqueeTexts.length);
+    randomMarqueeText.value = marqueeTexts[randomIndex](name);
+}
 
 // 獲取歷史數據總和
 const fetchHistoricalTotal = async () => {
