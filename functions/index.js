@@ -12,12 +12,55 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
   for (const event of events) {
     if (event.type === "message" && event.message.type === "text") {
       const msg = event.message.text.trim();
-      const match = msg.match(/^(.+?)\s*\+1$/);
 
-      if (match) {
-        const name = match[1];
+      // 處理宣告設定
+      const declarationMatch = msg.match(/^(.+?):(.+)$/);
+      if (declarationMatch) {
+        const name = declarationMatch[1].trim();
+        const declaration = declarationMatch[2].trim();
+
+        // 更新用戶的宣告內容
+        const userRef = db.ref(`poopCounter/${name}`);
+        const userSnapshot = await userRef.once("value");
+        const userData = userSnapshot.val();
+
+        // 處理舊數據格式
+        if (typeof userData === 'number') {
+          // 如果是舊格式（純數字），轉換為新格式
+          await userRef.set({
+            count: userData,
+            declaration: declaration
+          });
+        } else {
+          // 如果是新格式，保留計數，更新宣告
+          await userRef.set({
+            ...userData,
+            count: userData?.count || 0,
+            declaration: declaration
+          });
+        }
+
+        continue;
+      }
+
+      // 處理 +1 計數
+      const countMatch = msg.match(/^(.+?)\s*\+1$/);
+      if (countMatch) {
+        const name = countMatch[1];
         const ref = db.ref(`poopCounter/${name}`);
-        await ref.transaction((current) => (current || 0) + 1);
+        await ref.transaction((current) => {
+          if (!current) {
+            return { count: 1 };
+          }
+          // 處理舊數據格式
+          if (typeof current === 'number') {
+            return { count: current + 1 };
+          }
+          return {
+            ...current,
+            count: (current.count || 0) + 1
+          };
+        });
       }
     }
   }

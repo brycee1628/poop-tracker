@@ -4,7 +4,7 @@
         <p class="subtitle">讓我們一起譜寫歷屎 📖</p>
         <p class="total">當前魔力濃度 {{ totalAllCount }}</p>
         <div v-if="topPooper" class="marquee">
-            <span>{{ randomMarqueeText }}</span>
+            <span>榜一{{ topPooper.name }}: {{ topPooper.declaration || '吾乃歷💩名將，誰敢與我一爭？不服來💩！' }}</span>
         </div>
 
         <div v-for="({ name, count }, index) in sortedPoopList" :key="name" class="card"
@@ -26,21 +26,35 @@ import { database, ref, onValue, get } from '../firebase';
 
 const poopData = reactive({});
 const historicalTotal = vueRef(0);
-const randomMarqueeText = vueRef('');
-
-const marqueeTexts = [
-    (name) => `榜一${name}: 吾乃歷💩名將，誰敢與我一爭？不服來💩！`,
-    (name) => `榜一${name}：屎間還很多，我可以等你。`
-];
 
 const sortedPoopList = computed(() => {
     return Object.entries(poopData)
-        .map(([name, count]) => ({ name, count }))
+        .map(([name, data]) => {
+            // 處理舊數據格式
+            if (typeof data === 'number') {
+                return {
+                    name,
+                    count: data,
+                    declaration: null
+                };
+            }
+            return {
+                name,
+                count: data?.count || 0,
+                declaration: data?.declaration
+            };
+        })
         .sort((a, b) => b.count - a.count);
 });
 
 const totalCount = computed(() => {
-    return Object.values(poopData).reduce((sum, count) => sum + count, 0);
+    return Object.values(poopData).reduce((sum, data) => {
+        // 處理舊數據格式
+        if (typeof data === 'number') {
+            return sum + data;
+        }
+        return sum + (data?.count || 0);
+    }, 0);
 });
 
 const totalAllCount = computed(() => {
@@ -48,20 +62,8 @@ const totalAllCount = computed(() => {
 });
 
 const topPooper = computed(() => {
-    if (sortedPoopList.value.length > 0) {
-        const top = sortedPoopList.value[0];
-        // 當排行榜資料更新時，隨機選擇一條跑馬燈文字
-        updateRandomMarqueeText(top.name);
-        return top;
-    }
-    return null;
+    return sortedPoopList.value.length > 0 ? sortedPoopList.value[0] : null;
 });
-
-// 更新隨機跑馬燈文字
-function updateRandomMarqueeText(name) {
-    const randomIndex = Math.floor(Math.random() * marqueeTexts.length);
-    randomMarqueeText.value = marqueeTexts[randomIndex](name);
-}
 
 // 獲取歷史數據總和
 const fetchHistoricalTotal = async () => {
