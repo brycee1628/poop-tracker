@@ -48,17 +48,42 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
       if (countMatch) {
         const name = countMatch[1];
         const ref = db.ref(`poopCounter/${name}`);
+
+        // 獲取當前日期
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const dateString = `${year}-${month}-${day}`;
+
         await ref.transaction((current) => {
           if (!current) {
-            return { count: 1 };
+            return {
+              count: 1,
+              dailyRecords: {
+                [dateString]: 1
+              }
+            };
           }
+
           // 處理舊數據格式
           if (typeof current === 'number') {
-            return { count: current + 1 };
+            return {
+              count: current + 1,
+              dailyRecords: {
+                [dateString]: 1
+              }
+            };
           }
+
+          // 新數據格式
+          const newDailyRecords = { ...(current.dailyRecords || {}) };
+          newDailyRecords[dateString] = (newDailyRecords[dateString] || 0) + 1;
+
           return {
             ...current,
-            count: (current.count || 0) + 1
+            count: (current.count || 0) + 1,
+            dailyRecords: newDailyRecords
           };
         });
       }
