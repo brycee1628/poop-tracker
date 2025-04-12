@@ -18,8 +18,8 @@
                     </h2>
                     <div class="health-indicator">
                         <div class="health-dot" :class="data.status" :title="data.status === 'green' ? '健康狀態良好' :
-                            data.status === 'orange' ? '已3天未上廁所' :
-                                data.status === 'red' ? '已5天以上未上廁所' : '未知狀態'"></div>
+                            data.status === 'orange' ? '已2天未上廁所' :
+                                data.status === 'red' ? '已3天以上未上廁所' : '未知狀態'"></div>
                     </div>
                 </div>
                 <p>{{ data.count }} 次</p>
@@ -129,14 +129,33 @@ function goToUserDetail(name) {
 
 // 計算健康狀態：綠燈（正常）、橘燈（2天沒上廁所）、紅燈（3天及以上）
 function getHealthStatus(dailyRecords) {
-    // 如果沒有 dailyRecords 數據結構，嘗試使用今天的日期作為參考
+    // 如果沒有 dailyRecords 數據結構
     if (!dailyRecords) {
-        // 沒有足夠數據，默認設為未知
-        return 'green'; // 臨時設為綠色，方便看到效果
+        // 檢查是否有今天的數據 (但沒有具體記錄)
+        // 將這種數據視為當月1號的記錄
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = now.getMonth() + 1;
+        const firstDayStr = `${year}-${String(month).padStart(2, '0')}-01`;
+
+        // 假設有當月1號的記錄，但仍根據時間判斷燈號顏色
+        return getStatusBasedOnDate(firstDayStr);
     }
 
+    // 找到最後一次記錄的日期
+    const dates = Object.keys(dailyRecords).sort().reverse();
+    if (dates.length === 0) {
+        // 今天剛開始記錄的情況
+        return 'green';
+    }
+
+    const lastRecordDate = dates[0];
+    return getStatusBasedOnDate(lastRecordDate);
+}
+
+// 根據日期計算健康狀態
+function getStatusBasedOnDate(dateStr) {
     const now = new Date();
-    const today = now.toISOString().split('T')[0]; // 格式：YYYY-MM-DD
 
     // 計算1天前、2天前和3天前的日期
     const oneDayAgo = new Date(now);
@@ -147,23 +166,10 @@ function getHealthStatus(dailyRecords) {
     twoDaysAgo.setDate(now.getDate() - 2);
     const twoDaysAgoStr = twoDaysAgo.toISOString().split('T')[0];
 
-    const threeDaysAgo = new Date(now);
-    threeDaysAgo.setDate(now.getDate() - 3);
-    const threeDaysAgoStr = threeDaysAgo.toISOString().split('T')[0];
-
-    // 找到最後一次記錄的日期
-    const dates = Object.keys(dailyRecords).sort().reverse();
-    if (dates.length === 0) {
-        // 今天剛開始記錄的情況
-        return 'green';
-    }
-
-    const lastRecordDate = dates[0];
-
     // 判斷狀態 - 更加嚴格的標準
-    if (lastRecordDate >= oneDayAgoStr) {
+    if (dateStr >= oneDayAgoStr) {
         return 'green'; // 1天內有記錄，正常
-    } else if (lastRecordDate >= twoDaysAgoStr) {
+    } else if (dateStr >= twoDaysAgoStr) {
         return 'orange'; // 整整2天沒記錄，警告
     } else {
         return 'red'; // 3天及以上沒記錄，危險

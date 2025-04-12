@@ -128,34 +128,82 @@ async function fetchHistoricalTotal() {
     historicalTotal.value = total;
 }
 
+// 生成空的每日記錄數組
+function generateEmptyDailyRecords(monthString) {
+    const records = [];
+    if (monthString === 'current') {
+        // 獲取當前日期，考慮台北時區
+        const now = new Date();
+        // 調整為台北時區 (UTC+8)
+        const taipeiTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+        const year = taipeiTime.getUTCFullYear();
+        const month = taipeiTime.getUTCMonth() + 1;
+        const currentDay = taipeiTime.getUTCDate();
+        const daysInMonth = getDaysInMonth(year, month);
+
+        for (let day = 1; day <= currentDay; day++) {
+            const dateString = `${month}月${day}日`;
+            records.push({
+                date: dateString,
+                count: 0
+            });
+        }
+    } else {
+        const [year, month] = monthString.split('-').map(Number);
+        const daysInMonth = getDaysInMonth(year, month);
+
+        for (let day = 1; day <= daysInMonth; day++) {
+            const dateString = `${month}月${day}日`;
+            records.push({
+                date: dateString,
+                count: 0
+            });
+        }
+    }
+    return records;
+}
+
 async function fetchMonthData() {
     if (selectedMonth.value === 'current') {
         // 獲取當前月份數據
         const currentRef = dbRef(database, `poopCounter/${userName}`);
         onValue(currentRef, (snapshot) => {
             const data = snapshot.val();
+
+            // 獲取當前日期，確保使用台北時區
+            const now = new Date();
+            // 調整為台北時區 (UTC+8)
+            const taipeiTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+            const currentYear = taipeiTime.getUTCFullYear();
+            const currentMonth = taipeiTime.getUTCMonth() + 1;
+            const currentDay = taipeiTime.getUTCDate();
+            const todayStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(currentDay).padStart(2, '0')}`;
+
             if (typeof data === 'number') {
                 userData.value = { count: data };
-                dailyRecords.value = generateDailyRecords('current');
+                // 舊數據結構（無日期記錄），將數據放在月初第一天
+                const records = generateEmptyDailyRecords('current');
+                records[0].count = data; // 將總數放在1號
+                dailyRecords.value = records;
             } else {
                 userData.value = data || {};
 
-                // 生成基本的每日記錄
-                const records = generateDailyRecords('current');
+                // 生成基本的每日記錄（全為0）
+                const records = generateEmptyDailyRecords('current');
 
                 // 將實際數據填入
                 if (data && data.dailyRecords) {
-                    const today = new Date();
-                    const year = today.getFullYear();
-                    const month = today.getMonth() + 1;
-
+                    // 遍歷每一天
                     records.forEach((record, index) => {
                         const day = index + 1;
-                        const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                        const dateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         if (data.dailyRecords[dateStr]) {
                             record.count = data.dailyRecords[dateStr];
                         }
                     });
+                } else if (data && data.count) {
+                    // 有總數但沒有日期記錄的情況，將數據放在月初第一天
+                    records[0].count = data.count;
                 }
 
                 dailyRecords.value = records;
@@ -173,11 +221,11 @@ async function fetchMonthData() {
 
         if (data === null) {
             userData.value = { count: 0 };
-            dailyRecords.value = generateDailyRecords(selectedMonth.value);
+            dailyRecords.value = generateEmptyDailyRecords(selectedMonth.value);
         } else if (typeof data === 'number') {
             userData.value = { count: data };
             // 對於舊格式，將數據顯示在月份的第一天
-            const records = generateDailyRecords(selectedMonth.value);
+            const records = generateEmptyDailyRecords(selectedMonth.value);
             if (records.length > 0) {
                 records[0].count = data;
             }
@@ -186,19 +234,19 @@ async function fetchMonthData() {
             userData.value = data || {};
 
             // 生成基本的每日記錄
-            const records = generateDailyRecords(selectedMonth.value);
+            const records = generateEmptyDailyRecords(selectedMonth.value);
 
             // 將實際數據填入
             if (data && data.dailyRecords) {
                 records.forEach((record, index) => {
                     const day = index + 1;
-                    const dateStr = `${year}-${monthStr}-${String(day).padStart(2, '0')}`;
+                    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                     if (data.dailyRecords[dateStr]) {
                         record.count = data.dailyRecords[dateStr];
                     }
                 });
             } else if (data && data.count) {
-                // 僅有總數的情況
+                // 僅有總數的情況，將數據放在1號
                 if (records.length > 0) {
                     records[0].count = data.count;
                 }

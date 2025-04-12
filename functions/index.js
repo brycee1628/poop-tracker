@@ -49,11 +49,13 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
         const name = countMatch[1];
         const ref = db.ref(`poopCounter/${name}`);
 
-        // 獲取當前日期
+        // 獲取當前日期，使用台北時區
         const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
+        // 調整為台北時區 (UTC+8)
+        const taipeiTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+        const year = taipeiTime.getUTCFullYear();
+        const month = String(taipeiTime.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(taipeiTime.getUTCDate()).padStart(2, '0');
         const dateString = `${year}-${month}-${day}`;
 
         await ref.transaction((current) => {
