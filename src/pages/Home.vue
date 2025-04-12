@@ -10,11 +10,18 @@
         <div class="leaderboard">
             <div v-for="(data, index) in sortedPoopList" :key="data.name" class="user-card"
                 :class="{ 'top-user': index === 0 }" @click="goToUserDetail(data.name)">
-                <h2>
-                    第{{ index + 1 }}名
-                    <span v-if="index === 0">👑</span>
-                    {{ data.name }}
-                </h2>
+                <div class="card-header">
+                    <h2>
+                        第{{ index + 1 }}名
+                        <span v-if="index === 0">👑</span>
+                        {{ data.name }}
+                    </h2>
+                    <div class="health-indicator">
+                        <div class="health-dot" :class="data.status" :title="data.status === 'green' ? '健康狀態良好' :
+                            data.status === 'orange' ? '已3天未上廁所' :
+                                data.status === 'red' ? '已5天以上未上廁所' : '未知狀態'"></div>
+                    </div>
+                </div>
                 <p>{{ data.count }} 次</p>
             </div>
         </div>
@@ -39,13 +46,19 @@ const sortedPoopList = computed(() => {
                 return {
                     name,
                     count: data,
-                    declaration: null
+                    declaration: null,
+                    status: getHealthStatus(null) // 無法判斷狀態
                 };
             }
+
+            // 計算健康狀態
+            const status = getHealthStatus(data.dailyRecords);
+
             return {
                 name,
                 count: data?.count || 0,
-                declaration: data?.declaration
+                declaration: data?.declaration,
+                status: status
             };
         })
         .sort((a, b) => b.count - a.count);
@@ -112,6 +125,49 @@ onMounted(() => {
 
 function goToUserDetail(name) {
     router.push(`/user/${name}`);
+}
+
+// 計算健康狀態：綠燈（正常）、橘燈（2天沒上廁所）、紅燈（3天及以上）
+function getHealthStatus(dailyRecords) {
+    // 如果沒有 dailyRecords 數據結構，嘗試使用今天的日期作為參考
+    if (!dailyRecords) {
+        // 沒有足夠數據，默認設為未知
+        return 'green'; // 臨時設為綠色，方便看到效果
+    }
+
+    const now = new Date();
+    const today = now.toISOString().split('T')[0]; // 格式：YYYY-MM-DD
+
+    // 計算1天前、2天前和3天前的日期
+    const oneDayAgo = new Date(now);
+    oneDayAgo.setDate(now.getDate() - 1);
+    const oneDayAgoStr = oneDayAgo.toISOString().split('T')[0];
+
+    const twoDaysAgo = new Date(now);
+    twoDaysAgo.setDate(now.getDate() - 2);
+    const twoDaysAgoStr = twoDaysAgo.toISOString().split('T')[0];
+
+    const threeDaysAgo = new Date(now);
+    threeDaysAgo.setDate(now.getDate() - 3);
+    const threeDaysAgoStr = threeDaysAgo.toISOString().split('T')[0];
+
+    // 找到最後一次記錄的日期
+    const dates = Object.keys(dailyRecords).sort().reverse();
+    if (dates.length === 0) {
+        // 今天剛開始記錄的情況
+        return 'green';
+    }
+
+    const lastRecordDate = dates[0];
+
+    // 判斷狀態 - 更加嚴格的標準
+    if (lastRecordDate >= oneDayAgoStr) {
+        return 'green'; // 1天內有記錄，正常
+    } else if (lastRecordDate >= twoDaysAgoStr) {
+        return 'orange'; // 整整2天沒記錄，警告
+    } else {
+        return 'red'; // 3天及以上沒記錄，危險
+    }
 }
 </script>
 
@@ -208,8 +264,11 @@ function goToUserDetail(name) {
 }
 
 .user-card h2 {
+    margin: 0;
     margin-bottom: 8px;
     color: #333;
+    font-size: 1.2em;
+    flex: 1;
 }
 
 .user-card p {
@@ -229,5 +288,45 @@ function goToUserDetail(name) {
     .user-card p {
         font-size: 1em;
     }
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.health-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 8px;
+}
+
+.health-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    box-shadow: 0 0 2px rgba(0, 0, 0, 0.2);
+}
+
+.health-dot.green {
+    background-color: #4CAF50;
+    box-shadow: 0 0 3px rgba(76, 175, 80, 0.5);
+}
+
+.health-dot.orange {
+    background-color: #FF9800;
+    box-shadow: 0 0 3px rgba(255, 152, 0, 0.5);
+}
+
+.health-dot.red {
+    background-color: #F44336;
+    box-shadow: 0 0 3px rgba(244, 67, 54, 0.5);
+}
+
+.health-dot.unknown {
+    background-color: #9E9E9E;
 }
 </style>
