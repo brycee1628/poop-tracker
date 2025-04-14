@@ -18,8 +18,8 @@
                     </h2>
                     <div class="health-indicator">
                         <div class="health-dot" :class="data.status" :title="data.status === 'green' ? '健康狀態良好' :
-                            data.status === 'orange' ? '已2天未上廁所' :
-                                data.status === 'red' ? '已3天以上未上廁所' : '未知狀態'"></div>
+                            data.status === 'orange' ? '已4天未上廁所' :
+                                data.status === 'red' ? '已5天以上未上廁所' : '未知狀態'"></div>
                     </div>
                 </div>
                 <p>{{ data.count }} 次</p>
@@ -156,23 +156,20 @@ function getHealthStatus(dailyRecords) {
 // 根據日期計算健康狀態
 function getStatusBasedOnDate(dateStr) {
     const now = new Date();
-
-    // 計算1天前、2天前和3天前的日期
-    const oneDayAgo = new Date(now);
-    oneDayAgo.setDate(now.getDate() - 1);
-    const oneDayAgoStr = oneDayAgo.toISOString().split('T')[0];
-
-    const twoDaysAgo = new Date(now);
-    twoDaysAgo.setDate(now.getDate() - 2);
-    const twoDaysAgoStr = twoDaysAgo.toISOString().split('T')[0];
-
-    // 判斷狀態 - 更加嚴格的標準
-    if (dateStr >= oneDayAgoStr) {
-        return 'green'; // 1天內有記錄，正常
-    } else if (dateStr >= twoDaysAgoStr) {
-        return 'orange'; // 整整2天沒記錄，警告
+    const today = now.toISOString().split('T')[0]; // 取得今天的日期字串 (YYYY-MM-DD)
+    const lastRecordDate = new Date(dateStr);
+    
+    // 計算日期差異（天數）
+    const diffTime = now - lastRecordDate;
+    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+    
+    // 判斷狀態
+    if (diffDays <= 3) {
+        return 'green'; // 今天到3天內有記錄，正常
+    } else if (diffDays == 4) {
+        return 'orange'; // 第4天還沒記錄，警告
     } else {
-        return 'red'; // 3天及以上沒記錄，危險
+        return 'red'; // 5天及以上沒記錄，危險
     }
 }
 </script>
