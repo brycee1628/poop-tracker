@@ -26,12 +26,41 @@
                         {{ data.name }}
                     </h2>
                     <div class="health-indicator">
-                        <div class="health-dot" :class="data.status" :title="data.status === 'green' ? '健康狀態良好' :
-                            data.status === 'orange' ? '已4天未上廁所' :
-                                data.status === 'red' ? '已5天以上未上廁所' : '未知狀態'"></div>
+                        <div class="health-dot" 
+                            :class="data.status" 
+                            :title="data.status === 'green' ? '健康狀態良好' :
+                                data.status === 'orange' ? '已4天未上廁所' :
+                                    data.status === 'red' ? '已5天以上未上廁所' : '未知狀態'"
+                            @click.stop="showHealthDetails(data.name)"
+                        ></div>
                     </div>
                 </div>
                 <p>{{ data.count }} 次</p>
+            </div>
+        </div>
+
+        <!-- 健康狀態詳情對話框 -->
+        <div v-if="showHealthModal" class="modal" @click="showHealthModal = false">
+            <div class="modal-content" @click.stop>
+                <h3>歷屎人物健康狀態詳細資訊</h3>
+                <div class="modal-body">
+                    <p><strong>名人:</strong> {{ healthDetailsUser }}</p>
+                    <p><strong>歷屎:</strong> {{ getLastRecordDate(healthDetailsUser) }}</p>
+                    <p><strong>缺席:</strong> {{ getDayDifference(healthDetailsUser) }} 天</p>
+                    <p><strong>狀態:</strong> 
+                        <span :class="'status-text ' + getHealthStatusById(healthDetailsUser)">
+                            {{ 
+                                getHealthStatusById(healthDetailsUser) === 'green' ? '良好' :
+                                getHealthStatusById(healthDetailsUser) === 'orange' ? '注意' :
+                                getHealthStatusById(healthDetailsUser) === 'red' ? '警告' : '未知'
+                            }}
+                        </span>
+                    </p>
+                    <p><strong>描述:</strong> {{ getHealthStatusTitle(healthDetailsUser) }}</p>
+                </div>
+                <div class="modal-footer">
+                    <button @click="showHealthModal = false">關閉</button>
+                </div>
             </div>
         </div>
     </div>
@@ -47,6 +76,8 @@ const poopData = reactive({});
 const historicalTotal = vueRef(0);
 const router = useRouter();
 const searchQuery = vueRef('');
+const showHealthModal = vueRef(false);
+const healthDetailsUser = vueRef('');
 
 const sortedPoopList = computed(() => {
     return Object.entries(poopData)
@@ -188,6 +219,98 @@ function getStatusBasedOnDate(dateStr) {
         return 'orange'; // 第4天還沒記錄，警告
     } else {
         return 'red'; // 5天及以上沒記錄，危險
+    }
+}
+
+// 顯示健康狀態詳細資訊
+function showHealthDetails(name) {
+    healthDetailsUser.value = name;
+    showHealthModal.value = true;
+}
+
+// 根據用戶ID獲取健康狀態
+function getHealthStatusById(name) {
+    const userData = poopData[name];
+    
+    // 處理舊數據格式
+    if (typeof userData === 'number') {
+        return 'unknown';
+    }
+    
+    // 計算健康狀態
+    return getHealthStatus(userData?.dailyRecords);
+}
+
+// 獲取用戶最後記錄日期
+function getLastRecordDate(name) {
+    const userData = poopData[name];
+    
+    if (!userData) {
+        return '無記錄';
+    }
+    
+    if (typeof userData === 'number') {
+        return '無日期資料';
+    }
+    
+    if (!userData.dailyRecords || Object.keys(userData.dailyRecords).length === 0) {
+        return '無記錄';
+    }
+    
+    const dates = Object.keys(userData.dailyRecords).sort().reverse();
+    return dates[0] || '無記錄';
+}
+
+// 計算日期差異（天數）
+function getDayDifference(name) {
+    if (!name || !poopData[name]) {
+        return '無法計算';
+    }
+    
+    const userData = poopData[name];
+    
+    if (typeof userData === 'number') {
+        return '無法計算';
+    }
+    
+    if (!userData.dailyRecords || Object.keys(userData.dailyRecords).length === 0) {
+        return '無法計算';
+    }
+    
+    const dates = Object.keys(userData.dailyRecords).sort().reverse();
+    const lastDate = dates[0];
+    
+    if (!lastDate) {
+        return '無法計算';
+    }
+    
+    try {
+        const now = new Date();
+        now.setHours(0, 0, 0, 0);
+        
+        const lastRecordDate = new Date(lastDate);
+        lastRecordDate.setHours(0, 0, 0, 0);
+        
+        const diffTime = now - lastRecordDate;
+        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+        
+        return diffDays;
+    } catch (error) {
+        return '計算錯誤';
+    }
+}
+
+// 獲取健康狀態提示標題
+function getHealthStatusTitle(name) {
+    const status = getHealthStatusById(name);
+    if (status === 'green') {
+        return '健康狀態良好 (3天內有記錄)';
+    } else if (status === 'orange') {
+        return '請注意健康狀態 (4天未上廁所)';
+    } else if (status === 'red') {
+        return '警告！已5天以上未上廁所';
+    } else {
+        return '未知狀態';
     }
 }
 </script>
@@ -374,10 +497,92 @@ function getStatusBasedOnDate(dateStr) {
     box-shadow: 0 0 5px rgba(255, 152, 0, 0.3);
 }
 
+/* 模態對話框樣式 */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background-color: white;
+    padding: 20px;
+    border-radius: 8px;
+    width: 80%;
+    max-width: 400px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.modal-content h3 {
+    margin-top: 0;
+    color: #333;
+    text-align: center;
+    margin-bottom: 15px;
+}
+
+.modal-body {
+    text-align: left;
+    margin-bottom: 15px;
+}
+
+.modal-body p {
+    margin: 8px 0;
+    text-align: left;
+}
+
+.modal-footer {
+    text-align: center;
+}
+
+.modal-content button {
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.modal-content button:hover {
+    background-color: #45a049;
+}
+
+.status-text {
+    font-weight: bold;
+}
+
+.status-text.green {
+    color: #4CAF50;
+}
+
+.status-text.orange {
+    color: #FF9800;
+}
+
+.status-text.red {
+    color: #F44336;
+}
+
+.status-text.unknown {
+    color: #9E9E9E;
+}
+
 @media (max-width: 480px) {
     .search-input {
         font-size: 0.9rem;
         padding: 8px 12px;
+    }
+    
+    .modal-content {
+        width: 90%;
+        padding: 15px;
     }
 }
 </style>
