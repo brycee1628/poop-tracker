@@ -7,8 +7,17 @@
             <span>榜一{{ topPooper.name }}: {{ topPooper.declaration || '吾乃歷💩名將，誰敢與我一爭？不服來💩！' }}</span>
         </div>
 
+        <div class="search-container">
+            <input 
+                type="text" 
+                v-model="searchQuery" 
+                placeholder="搜尋歷屎人物" 
+                class="search-input"
+            />
+        </div>
+
         <div class="leaderboard">
-            <div v-for="(data, index) in sortedPoopList" :key="data.name" class="user-card"
+            <div v-for="(data, index) in filteredPoopList" :key="data.name" class="user-card"
                 :class="{ 'top-user': index === 0 }" @click="goToUserDetail(data.name)">
                 <div class="card-header">
                     <h2>
@@ -37,6 +46,7 @@ import { useRouter } from 'vue-router';
 const poopData = reactive({});
 const historicalTotal = vueRef(0);
 const router = useRouter();
+const searchQuery = vueRef('');
 
 const sortedPoopList = computed(() => {
     return Object.entries(poopData)
@@ -62,6 +72,14 @@ const sortedPoopList = computed(() => {
             };
         })
         .sort((a, b) => b.count - a.count);
+});
+
+const filteredPoopList = computed(() => {
+    if (!searchQuery.value) return sortedPoopList.value;
+    
+    return sortedPoopList.value.filter(item => 
+        item.name.toLowerCase().includes(searchQuery.value.toLowerCase())
+    );
 });
 
 const totalCount = computed(() => {
@@ -331,5 +349,35 @@ function getStatusBasedOnDate(dateStr) {
 
 .health-dot.unknown {
     background-color: #9E9E9E;
+}
+
+/* 搜尋欄樣式 */
+.search-container {
+    margin-bottom: 20px;
+    width: 100%;
+}
+
+.search-input {
+    padding: 10px 15px;
+    width: 100%;
+    max-width: 500px;
+    border-radius: 8px;
+    border: 1px solid #ccc;
+    font-size: 1rem;
+    box-sizing: border-box;
+    transition: all 0.3s ease;
+}
+
+.search-input:focus {
+    outline: none;
+    border-color: #FF9800;
+    box-shadow: 0 0 5px rgba(255, 152, 0, 0.3);
+}
+
+@media (max-width: 480px) {
+    .search-input {
+        font-size: 0.9rem;
+        padding: 8px 12px;
+    }
 }
 </style>
