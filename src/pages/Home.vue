@@ -47,7 +47,7 @@
                     <p><strong>名人:</strong> {{ healthDetailsUser }}</p>
                     <p><strong>歷屎:</strong> {{ getLastRecordDate(healthDetailsUser) }}</p>
                     <p><strong>缺席:</strong> {{ getDayDifference(healthDetailsUser) }} 天</p>
-                    <p><strong>狀態:</strong> 
+                    <p><strong>狀態: </strong> 
                         <span :class="'status-text ' + getHealthStatusById(healthDetailsUser)">
                             {{ 
                                 getHealthStatusById(healthDetailsUser) === 'green' ? '良好' :
