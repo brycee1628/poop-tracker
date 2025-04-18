@@ -16,28 +16,36 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
       // 處理宣告設定
       const declarationMatch = msg.match(/^(.+?):(.+)$/);
       if (declarationMatch) {
-        const name = declarationMatch[1].trim();
-        const declaration = declarationMatch[2].trim();
+        const potentialName = declarationMatch[1].trim();
+        const potentialDeclaration = declarationMatch[2].trim();
 
-        // 更新用戶的宣告內容
-        const userRef = db.ref(`poopCounter/${name}`);
-        const userSnapshot = await userRef.once("value");
-        const userData = userSnapshot.val();
+        // 檢查是否是URL相關格式
+        const isURLPattern = /^(http|https|ftp):\/\//i.test(msg) || // 標準URL開頭
+          msg.includes("www.") || // 包含www.
+          msg.match(/\.[a-z]{2,}(\/|$)/i); // 包含域名後綴如.com, .org等
 
-        // 處理舊數據格式
-        if (typeof userData === 'number') {
-          // 如果是舊格式（純數字），轉換為新格式
-          await userRef.set({
-            count: userData,
-            declaration: declaration
-          });
-        } else {
-          // 如果是新格式，保留計數，更新宣告
-          await userRef.set({
-            ...userData,
-            count: userData?.count || 0,
-            declaration: declaration
-          });
+        // 如果不是URL，才處理為宣言
+        if (!isURLPattern) {
+          // 更新用戶的宣告內容
+          const userRef = db.ref(`poopCounter/${potentialName}`);
+          const userSnapshot = await userRef.once("value");
+          const userData = userSnapshot.val();
+
+          // 處理舊數據格式
+          if (typeof userData === 'number') {
+            // 如果是舊格式（純數字），轉換為新格式
+            await userRef.set({
+              count: userData,
+              declaration: potentialDeclaration
+            });
+          } else {
+            // 如果是新格式，保留計數，更新宣告
+            await userRef.set({
+              ...userData,
+              count: userData?.count || 0,
+              declaration: potentialDeclaration
+            });
+          }
         }
 
         continue;
