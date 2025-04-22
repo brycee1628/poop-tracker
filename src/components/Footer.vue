@@ -5,7 +5,7 @@
 <template>
     <div class="footer">
 
-        <div class="copyright">© 2025 魔王軍 All rights reserved.</div>
+        <div class="copyright">© 2025 魔界 makai All rights reserved.</div>
     </div>
 </template>
 
