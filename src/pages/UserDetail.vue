@@ -11,7 +11,8 @@
                 <p>{{ userData.declaration }}</p>
             </div>
 
-            <div class="month-selector">
+            <!-- 只有从首页进入时才显示月份选择器 -->
+            <div v-if="!isFromHistory" class="month-selector">
                 <select v-model="selectedMonth" @change="fetchMonthData">
                     <option value="current">本月</option>
                     <option v-for="month in availableMonths" :key="month" :value="month">
@@ -59,6 +60,7 @@ const userData = ref({});
 const dailyData = ref({});
 const dailyRecords = ref([]);
 const historicalTotal = ref(0);
+const isFromHistory = ref(false); // 判断是否从历史页面进入
 
 const currentMonthCount = computed(() => {
     return userData.value?.count || 0;
@@ -114,6 +116,11 @@ async function fetchHistoricalTotal() {
 
     // 遍歷所有月份
     for (const month in historyData) {
+        // 如果是当前选择的历史月份，则跳过，避免重复计算
+        if (selectedMonth.value !== 'current' && month === selectedMonth.value) {
+            continue;
+        }
+
         if (historyData[month][userName]) {
             const userData = historyData[month][userName];
             // 處理舊數據格式
@@ -254,11 +261,14 @@ async function fetchMonthData() {
 
             dailyRecords.value = records;
         }
+
+        // 重新計算歷史總計，確保數據正確
+        await fetchHistoricalTotal();
     }
 }
 
 function goBack() {
-    router.push('/');
+    router.go(-1); // 返回上一頁，而不是固定返回首頁
 }
 
 onMounted(async () => {
@@ -268,14 +278,24 @@ onMounted(async () => {
         const months = snapshot.val();
         if (months) {
             availableMonths.value = Object.keys(months).sort().reverse();
+
+            // 如果URL中包含月份参数，则优先使用该月份
+            const monthParam = route.query.month;
+            if (monthParam && availableMonths.value.includes(monthParam)) {
+                selectedMonth.value = monthParam;
+                isFromHistory.value = true; // 标记为从历史页面进入
+            } else {
+                // 否则使用默认值
+                selectedMonth.value = 'current';
+            }
+
+            // 获取初始数据
+            fetchMonthData();
         }
     });
 
     // 獲取歷史總計
     await fetchHistoricalTotal();
-
-    // 獲取初始數據
-    await fetchMonthData();
 });
 </script>
 

@@ -8,12 +8,7 @@
         </div>
 
         <div class="search-container">
-            <input 
-                type="text" 
-                v-model="searchQuery" 
-                placeholder="搜尋歷屎人物" 
-                class="search-input"
-            />
+            <input type="text" v-model="searchQuery" placeholder="搜尋歷屎人物" class="search-input" />
         </div>
 
         <div class="leaderboard">
@@ -26,13 +21,10 @@
                         {{ data.name }}
                     </h2>
                     <div class="health-indicator">
-                        <div class="health-dot" 
-                            :class="data.status" 
-                            :title="data.status === 'green' ? '健康狀態良好' :
-                                data.status === 'orange' ? '已4天未上廁所' :
-                                    data.status === 'red' ? '已5天以上未上廁所' : '未知狀態'"
-                            @click.stop="showHealthDetails(data.name)"
-                        ></div>
+                        <div class="health-dot" :class="data.status" :title="data.status === 'green' ? '健康狀態良好' :
+                            data.status === 'orange' ? '已4天未上廁所' :
+                                data.status === 'red' ? '已5天以上未上廁所' : '未知狀態'"
+                            @click.stop="showHealthDetails(data.name)"></div>
                     </div>
                 </div>
                 <p>{{ data.count }} 次</p>
@@ -47,12 +39,12 @@
                     <p><strong>名人:</strong> {{ healthDetailsUser }}</p>
                     <p><strong>歷屎:</strong> {{ getLastRecordDate(healthDetailsUser) }}</p>
                     <p><strong>缺席:</strong> {{ getDayDifference(healthDetailsUser) }} 天</p>
-                    <p><strong>狀態: </strong> 
+                    <p><strong>狀態: </strong>
                         <span :class="'status-text ' + getHealthStatusById(healthDetailsUser)">
-                            {{ 
+                            {{
                                 getHealthStatusById(healthDetailsUser) === 'green' ? '良好' :
-                                getHealthStatusById(healthDetailsUser) === 'orange' ? '注意' :
-                                getHealthStatusById(healthDetailsUser) === 'red' ? '警告' : '未知'
+                                    getHealthStatusById(healthDetailsUser) === 'orange' ? '注意' :
+                                        getHealthStatusById(healthDetailsUser) === 'red' ? '警告' : '未知'
                             }}
                         </span>
                     </p>
@@ -107,8 +99,8 @@ const sortedPoopList = computed(() => {
 
 const filteredPoopList = computed(() => {
     if (!searchQuery.value) return sortedPoopList.value;
-    
-    return sortedPoopList.value.filter(item => 
+
+    return sortedPoopList.value.filter(item =>
         item.name.toLowerCase().includes(searchQuery.value.toLowerCase())
     );
 });
@@ -140,10 +132,16 @@ const fetchHistoricalTotal = async () => {
     let total = 0;
 
     // 遍歷每個月份
-    Object.values(historyData).forEach(monthData => {
+    Object.entries(historyData).forEach(([month, monthData]) => {
         // 遍歷每個月份中的每個人的數據
-        Object.values(monthData).forEach(count => {
-            total += count;
+        Object.entries(monthData).forEach(([name, userData]) => {
+            // 處理舊數據格式 (直接是數字)
+            if (typeof userData === 'number') {
+                total += userData;
+            } else {
+                // 處理新數據格式 (對象格式)
+                total += userData?.count || 0;
+            }
         });
     });
 
@@ -207,11 +205,11 @@ function getStatusBasedOnDate(dateStr) {
     const now = new Date();
     const today = now.toISOString().split('T')[0]; // 取得今天的日期字串 (YYYY-MM-DD)
     const lastRecordDate = new Date(dateStr);
-    
+
     // 計算日期差異（天數）
     const diffTime = now - lastRecordDate;
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-    
+
     // 判斷狀態
     if (diffDays <= 3) {
         return 'green'; // 今天到3天內有記錄，正常
@@ -231,12 +229,12 @@ function showHealthDetails(name) {
 // 根據用戶ID獲取健康狀態
 function getHealthStatusById(name) {
     const userData = poopData[name];
-    
+
     // 處理舊數據格式
     if (typeof userData === 'number') {
         return 'unknown';
     }
-    
+
     // 計算健康狀態
     return getHealthStatus(userData?.dailyRecords);
 }
@@ -244,19 +242,19 @@ function getHealthStatusById(name) {
 // 獲取用戶最後記錄日期
 function getLastRecordDate(name) {
     const userData = poopData[name];
-    
+
     if (!userData) {
         return '無記錄';
     }
-    
+
     if (typeof userData === 'number') {
         return '無日期資料';
     }
-    
+
     if (!userData.dailyRecords || Object.keys(userData.dailyRecords).length === 0) {
         return '無記錄';
     }
-    
+
     const dates = Object.keys(userData.dailyRecords).sort().reverse();
     return dates[0] || '無記錄';
 }
@@ -266,34 +264,34 @@ function getDayDifference(name) {
     if (!name || !poopData[name]) {
         return '無法計算';
     }
-    
+
     const userData = poopData[name];
-    
+
     if (typeof userData === 'number') {
         return '無法計算';
     }
-    
+
     if (!userData.dailyRecords || Object.keys(userData.dailyRecords).length === 0) {
         return '無法計算';
     }
-    
+
     const dates = Object.keys(userData.dailyRecords).sort().reverse();
     const lastDate = dates[0];
-    
+
     if (!lastDate) {
         return '無法計算';
     }
-    
+
     try {
         const now = new Date();
         now.setHours(0, 0, 0, 0);
-        
+
         const lastRecordDate = new Date(lastDate);
         lastRecordDate.setHours(0, 0, 0, 0);
-        
+
         const diffTime = now - lastRecordDate;
         const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-        
+
         return diffDays;
     } catch (error) {
         return '計算錯誤';
@@ -579,7 +577,7 @@ function getHealthStatusTitle(name) {
         font-size: 0.9rem;
         padding: 8px 12px;
     }
-    
+
     .modal-content {
         width: 90%;
         padding: 15px;
