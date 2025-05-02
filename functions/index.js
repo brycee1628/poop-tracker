@@ -113,10 +113,23 @@ exports.monthlyReset = onSchedule(
     cpu: 1,
   },
   async () => {
+    // 獲取台北時區的當前日期
     const now = new Date();
-    const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const backupYear = lastMonthDate.getFullYear();
-    const monthString = String(lastMonthDate.getMonth() + 1).padStart(2, "0");
+    // 調整為台北時區 (UTC+8)
+    const taipeiTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+
+    // 計算上個月的年份和月份
+    // 這裡先創建上個月1號的日期
+    const lastMonthDate = new Date(taipeiTime);
+    lastMonthDate.setUTCDate(1); // 設置為當月1號
+    lastMonthDate.setUTCMonth(lastMonthDate.getUTCMonth() - 1); // 減去一個月
+
+    const backupYear = lastMonthDate.getUTCFullYear();
+    const backupMonth = lastMonthDate.getUTCMonth() + 1; // 月份從0開始，所以+1
+    const monthString = String(backupMonth).padStart(2, "0");
+
+    console.log(`🗓️ 當前台北時間: ${taipeiTime.toISOString()}`);
+    console.log(`📅 備份上個月: ${backupYear}-${monthString}`);
 
     const poopRef = db.ref("poopCounter");
     const snapshot = await poopRef.once("value");
@@ -127,11 +140,29 @@ exports.monthlyReset = onSchedule(
       return null;
     }
 
+    // 備份數據到對應月份
     const backupRef = db.ref(`monthlyHistory/${backupYear}-${monthString}`);
     await backupRef.set(data);
-    await poopRef.remove();
 
-    console.log(`📦 已備份 ${backupYear}-${monthString} 並清空排行榜`);
+    // 保留宣言，重置計數
+    const declarations = {};
+
+    // 收集所有用戶的宣言
+    Object.entries(data).forEach(([name, userData]) => {
+      // 只保留宣言字段
+      if (typeof userData === 'object' && userData.declaration) {
+        declarations[name] = {
+          count: 0,
+          declaration: userData.declaration,
+          dailyRecords: {}
+        };
+      }
+    });
+
+    // 清空所有計數但保留宣言
+    await poopRef.set(declarations);
+
+    console.log(`📦 已備份 ${backupYear}-${monthString} 並重置排行榜，保留用戶宣言`);
     return null;
   }
 );
