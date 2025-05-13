@@ -8,6 +8,7 @@ import Footer from './components/Footer.vue';
     <NavBar :paths="[
       { id: 0, pageName: '首頁', url: '/' },
       { id: 1, pageName: '歷屎', url: '/history' },
+      { id: 2, pageName: '聖域', url: '/gacha' },
     ]">
     </NavBar>
     <router-view></router-view>
