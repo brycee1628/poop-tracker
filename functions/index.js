@@ -113,63 +113,87 @@ exports.monthlyReset = onSchedule(
     cpu: 1,
   },
   async () => {
-    // 獲取台北時區的當前日期
-    const now = new Date();
-    // 調整為台北時區 (UTC+8)
-    const taipeiTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+    try {
+      // 獲取台北時區的當前日期
+      const now = new Date();
+      // 調整為台北時區 (UTC+8)
+      const taipeiTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
 
-    // 計算上個月的年份和月份
-    // 這裡先創建上個月1號的日期
-    const lastMonthDate = new Date(taipeiTime);
-    lastMonthDate.setUTCDate(1); // 設置為當月1號
-    lastMonthDate.setUTCMonth(lastMonthDate.getUTCMonth() - 1); // 減去一個月
+      // 計算上個月的年份和月份
+      const lastMonthDate = new Date(taipeiTime);
+      lastMonthDate.setUTCDate(1); // 設置為當月1號
+      lastMonthDate.setUTCMonth(lastMonthDate.getUTCMonth() - 1); // 減去一個月
 
-    const backupYear = lastMonthDate.getUTCFullYear();
-    const backupMonth = lastMonthDate.getUTCMonth() + 1; // 月份從0開始，所以+1
-    const monthString = String(backupMonth).padStart(2, "0");
+      const backupYear = lastMonthDate.getUTCFullYear();
+      const backupMonth = lastMonthDate.getUTCMonth() + 1; // 月份從0開始，所以+1
+      const monthString = String(backupMonth).padStart(2, "0");
 
-    console.log(`🗓️ 當前台北時間: ${taipeiTime.toISOString()}`);
-    console.log(`📅 備份上個月: ${backupYear}-${monthString}`);
+      console.log(`🗓️ 當前台北時間: ${taipeiTime.toISOString()}`);
+      console.log(`📅 備份上個月: ${backupYear}-${monthString}`);
 
-    const poopRef = db.ref("poopCounter");
-    const snapshot = await poopRef.once("value");
-    const data = snapshot.val();
+      const poopRef = db.ref("poopCounter");
+      const snapshot = await poopRef.once("value");
+      const data = snapshot.val();
 
-    if (!data) {
-      console.log("💤 沒有排行榜資料，跳過結算");
-      return null;
-    }
-
-    // 備份數據到對應月份
-    const backupRef = db.ref(`monthlyHistory/${backupYear}-${monthString}`);
-    await backupRef.set(data);
-
-    // 保留宣言，重置計數
-    const declarations = {};
-
-    // 收集所有用戶的宣言
-    Object.entries(data).forEach(([name, userData]) => {
-      // 只保留宣言字段
-      if (typeof userData === 'object' && userData.declaration) {
-        declarations[name] = {
-          count: 0,
-          declaration: userData.declaration,
-          dailyRecords: {}
-        };
+      if (!data) {
+        console.log("💤 沒有排行榜資料，跳過結算");
+        return null;
       }
-    });
 
-    // 清空所有計數但保留宣言
-    await poopRef.set(declarations);
+      // 檢查是否已經備份過這個月份
+      const backupRef = db.ref(`monthlyHistory/${backupYear}-${monthString}`);
+      const existingBackup = await backupRef.once("value");
+      
+      if (existingBackup.exists()) {
+        console.log(`⚠️ ${backupYear}-${monthString} 已經備份過，跳過重複備份`);
+        return null;
+      }
 
-    console.log(`📦 已備份 ${backupYear}-${monthString} 並重置排行榜，保留用戶宣言`);
-    return null;
+      // 備份數據到對應月份
+      await backupRef.set(data);
+      console.log(`📦 已備份 ${backupYear}-${monthString} 的資料`);
+
+      // 重置所有用戶資料，但保留宣言
+      const resetData = {};
+
+      Object.entries(data).forEach(([name, userData]) => {
+        if (typeof userData === 'number') {
+          // 處理舊格式用戶（純數字）
+          resetData[name] = {
+            count: 0,
+            dailyRecords: {}
+          };
+        } else {
+          // 處理新格式用戶（對象格式）
+          resetData[name] = {
+            count: 0,
+            declaration: userData.declaration || null, // 保留宣言
+            dailyRecords: {}
+          };
+        }
+      });
+
+      // 更新資料庫
+      await poopRef.set(resetData);
+
+      console.log(`✅ 已重置排行榜，保留 ${Object.keys(resetData).length} 位用戶的宣言`);
+      console.log(`📊 重置的用戶: ${Object.keys(resetData).join(', ')}`);
+      
+      return null;
+    } catch (error) {
+      console.error("❌ 月底結算發生錯誤:", error);
+      throw error;
+    }
   }
 );
 
 
-// // ✅ 手動測試 monthlyReset（可從瀏覽器觸發）
-// exports.testMonthlyReset = functions.https.onRequest(async (req, res) => {
-//   await exports.monthlyReset.run();
-//   res.send("✅ monthlyReset 手動觸發完成！");
-// });
+// ✅ 手動測試 monthlyReset（可從瀏覽器觸發）
+exports.testMonthlyReset = functions.https.onRequest(async (req, res) => {
+  try {
+    await exports.monthlyReset.run();
+    res.send("✅ monthlyReset 手動觸發完成！");
+  } catch (error) {
+    res.status(500).send(`❌ 錯誤: ${error.message}`);
+  }
+});
