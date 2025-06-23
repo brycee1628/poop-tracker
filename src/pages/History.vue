@@ -31,9 +31,33 @@
             <h2>{{ selectedUser }} 的每日記錄</h2>
             <div class="daily-list">
                 <div v-for="day in dailyRecords" :key="day.date" class="daily-item"
-                    :class="{ 'has-data': day.count > 0 }">
+                    :class="{ 'has-data': day.count > 0, 'clickable': day.count > 0 }" @click="showDayDetails(day)">
                     <span class="date">{{ day.date }}</span>
                     <span class="count">{{ day.count }} 次</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 當日詳細時間彈窗 -->
+        <div v-if="showTimeModal" class="modal" @click="showTimeModal = false">
+            <div class="modal-content" @click.stop>
+                <h3>{{ selectedDay?.date }} 詳細記錄</h3>
+                <div class="modal-body">
+                    <p><strong>總次數:</strong> {{ selectedDay?.count }} 次</p>
+                    <div v-if="selectedDay?.times && selectedDay.times.length > 0" class="time-list">
+                        <p><strong>記錄時間:</strong></p>
+                        <div class="time-grid">
+                            <span v-for="(time, index) in selectedDay.times" :key="index" class="time-tag">
+                                {{ time }}
+                            </span>
+                        </div>
+                    </div>
+                    <div v-else class="no-time-data">
+                        <p>此記錄沒有詳細時間資料</p>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button @click="showTimeModal = false">關閉</button>
                 </div>
             </div>
         </div>
@@ -51,6 +75,8 @@ const availableMonths = ref([]);
 const historyData = ref({});
 const selectedUser = ref('');
 const dailyRecords = ref([]);
+const showTimeModal = ref(false);
+const selectedDay = ref(null);
 
 const sortedHistory = computed(() => {
     // 確保我們有正確的資料格式，處理新舊數據格式
@@ -96,7 +122,9 @@ function generateEmptyDailyRecords(monthString) {
         const dateString = `${month}月${day}日`;
         records.push({
             date: dateString,
-            count: 0
+            count: 0,
+            times: [],
+            fullDate: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
         });
     }
     return records;
@@ -119,6 +147,7 @@ async function fetchDailyRecords(name) {
         // 舊數據格式，沒有每日記錄，將總數顯示在月初
         if (records.length > 0) {
             records[0].count = userData;
+            records[0].times = []; // 舊資料沒有時間記錄
         }
     } else if (userData && userData.dailyRecords) {
         // 新數據格式，有每日記錄
@@ -126,13 +155,23 @@ async function fetchDailyRecords(name) {
             const day = index + 1;
             const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
             if (userData.dailyRecords[dateStr]) {
-                record.count = userData.dailyRecords[dateStr];
+                const dayData = userData.dailyRecords[dateStr];
+                if (typeof dayData === 'number') {
+                    // 舊格式：純數字
+                    record.count = dayData;
+                    record.times = [];
+                } else {
+                    // 新格式：包含時間
+                    record.count = dayData.count || 0;
+                    record.times = dayData.times || [];
+                }
             }
         });
     } else if (userData && userData.count) {
         // 有總數但沒有日期記錄的情況
         if (records.length > 0) {
             records[0].count = userData.count;
+            records[0].times = []; // 沒有詳細時間記錄
         }
     }
 
@@ -182,6 +221,11 @@ onMounted(() => {
         }
     });
 });
+
+function showDayDetails(day) {
+    selectedDay.value = day;
+    showTimeModal.value = true;
+}
 </script>
 
 <style scoped>
@@ -307,5 +351,91 @@ select {
 
 .daily-item.has-data .count {
     color: #0066cc;
+}
+
+.daily-item.clickable {
+    cursor: pointer;
+}
+
+/* 當日詳細時間彈窗樣式 */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.modal-content {
+    background-color: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    max-width: 600px;
+    width: 90%;
+}
+
+.modal-content h3 {
+    font-size: 1.5em;
+    font-weight: bold;
+    margin-bottom: 20px;
+}
+
+.modal-body {
+    margin-bottom: 20px;
+}
+
+.modal-body p {
+    margin: 10px 0;
+}
+
+.modal-body strong {
+    font-weight: bold;
+}
+
+.time-list {
+    margin-top: 10px;
+}
+
+.time-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.time-tag {
+    background-color: #f0f0f0;
+    padding: 5px 10px;
+    border-radius: 4px;
+}
+
+.no-time-data {
+    text-align: center;
+    color: #999;
+}
+
+.modal-footer {
+    text-align: right;
+}
+
+.modal-footer button {
+    padding: 10px 20px;
+    background-color: #007bff;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.modal-footer button:hover {
+    background-color: #0056b3;
+}
+
+.note {
+    font-size: 0.8em;
+    color: #666;
 }
 </style>

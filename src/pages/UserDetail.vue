@@ -36,10 +36,34 @@
                 <h2>一日之計在於屎</h2>
                 <div class="daily-list">
                     <div v-for="day in dailyRecords" :key="day.date" class="daily-item"
-                        :class="{ 'has-data': day.count > 0 }">
+                        :class="{ 'has-data': day.count > 0, 'clickable': day.count > 0 }" @click="showDayDetails(day)">
                         <span class="date">{{ day.date }}</span>
                         <span class="count">{{ day.count }} 次</span>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 當日詳細時間彈窗 -->
+        <div v-if="showTimeModal" class="modal" @click="showTimeModal = false">
+            <div class="modal-content" @click.stop>
+                <h3>{{ selectedDay?.date }} 詳細記錄</h3>
+                <div class="modal-body">
+                    <p><strong>總次數:</strong> {{ selectedDay?.count }} 次</p>
+                    <div v-if="selectedDay?.times && selectedDay.times.length > 0" class="time-list">
+                        <p><strong>記錄時間:</strong></p>
+                        <div class="time-grid">
+                            <span v-for="(time, index) in selectedDay.times" :key="index" class="time-tag">
+                                {{ time }}
+                            </span>
+                        </div>
+                    </div>
+                    <div v-else class="no-time-data">
+                        <p>此記錄沒有詳細時間資料</p>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button @click="showTimeModal = false">關閉</button>
                 </div>
             </div>
         </div>
@@ -61,6 +85,8 @@ const dailyData = ref({});
 const dailyRecords = ref([]);
 const historicalTotal = ref(0);
 const isFromHistory = ref(false); // 判断是否从历史页面进入
+const showTimeModal = ref(false);
+const selectedDay = ref(null);
 
 const currentMonthCount = computed(() => {
     return userData.value?.count || 0;
@@ -152,7 +178,9 @@ function generateEmptyDailyRecords(monthString) {
             const dateString = `${month}月${day}日`;
             records.push({
                 date: dateString,
-                count: 0
+                count: 0,
+                times: [],
+                fullDate: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
             });
         }
     } else {
@@ -163,7 +191,9 @@ function generateEmptyDailyRecords(monthString) {
             const dateString = `${month}月${day}日`;
             records.push({
                 date: dateString,
-                count: 0
+                count: 0,
+                times: [],
+                fullDate: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
             });
         }
     }
@@ -190,7 +220,10 @@ async function fetchMonthData() {
                 userData.value = { count: data };
                 // 舊數據結構（無日期記錄），將數據放在月初第一天
                 const records = generateEmptyDailyRecords('current');
-                records[0].count = data; // 將總數放在1號
+                if (records.length > 0) {
+                    records[0].count = data; // 將總數放在1號
+                    records[0].times = []; // 舊資料沒有時間記錄
+                }
                 dailyRecords.value = records;
             } else {
                 userData.value = data || {};
@@ -205,12 +238,24 @@ async function fetchMonthData() {
                         const day = index + 1;
                         const dateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         if (data.dailyRecords[dateStr]) {
-                            record.count = data.dailyRecords[dateStr];
+                            const dayData = data.dailyRecords[dateStr];
+                            if (typeof dayData === 'number') {
+                                // 舊格式：純數字
+                                record.count = dayData;
+                                record.times = [];
+                            } else {
+                                // 新格式：包含時間
+                                record.count = dayData.count || 0;
+                                record.times = dayData.times || [];
+                            }
                         }
                     });
                 } else if (data && data.count) {
                     // 有總數但沒有日期記錄的情況，將數據放在月初第一天
-                    records[0].count = data.count;
+                    if (records.length > 0) {
+                        records[0].count = data.count;
+                        records[0].times = [];
+                    }
                 }
 
                 dailyRecords.value = records;
@@ -235,6 +280,7 @@ async function fetchMonthData() {
             const records = generateEmptyDailyRecords(selectedMonth.value);
             if (records.length > 0) {
                 records[0].count = data;
+                records[0].times = []; // 舊資料沒有時間記錄
             }
             dailyRecords.value = records;
         } else {
@@ -249,13 +295,23 @@ async function fetchMonthData() {
                     const day = index + 1;
                     const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                     if (data.dailyRecords[dateStr]) {
-                        record.count = data.dailyRecords[dateStr];
+                        const dayData = data.dailyRecords[dateStr];
+                        if (typeof dayData === 'number') {
+                            // 舊格式：純數字
+                            record.count = dayData;
+                            record.times = [];
+                        } else {
+                            // 新格式：包含時間
+                            record.count = dayData.count || 0;
+                            record.times = dayData.times || [];
+                        }
                     }
                 });
             } else if (data && data.count) {
                 // 僅有總數的情況，將數據放在1號
                 if (records.length > 0) {
                     records[0].count = data.count;
+                    records[0].times = [];
                 }
             }
 
@@ -269,6 +325,11 @@ async function fetchMonthData() {
 
 function goBack() {
     router.go(-1); // 返回上一頁，而不是固定返回首頁
+}
+
+function showDayDetails(day) {
+    selectedDay.value = day;
+    showTimeModal.value = true;
 }
 
 onMounted(async () => {
@@ -462,6 +523,94 @@ select {
 .daily-item .count {
     color: #e65100;
     font-weight: bold;
+}
+
+.daily-item.clickable {
+    cursor: pointer;
+}
+
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.modal-content {
+    background-color: white;
+    padding: 20px;
+    border-radius: 8px;
+    max-width: 80%;
+    width: 100%;
+    max-height: 80%;
+    overflow-y: auto;
+}
+
+.modal-content h3 {
+    color: #e65100;
+    margin-bottom: 10px;
+}
+
+.modal-body {
+    margin-bottom: 20px;
+}
+
+.modal-body p {
+    margin: 10px 0;
+}
+
+.time-list {
+    margin-top: 10px;
+}
+
+.time-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.time-tag {
+    background-color: #e65100;
+    color: white;
+    padding: 5px 10px;
+    border-radius: 5px;
+}
+
+.no-time-data {
+    text-align: center;
+}
+
+.modal-footer {
+    text-align: right;
+}
+
+.modal-footer button {
+    background-color: #e65100;
+    color: white;
+    border: none;
+    padding: 8px 15px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.9em;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.modal-footer button:hover {
+    background-color: #f57c00;
+    transform: scale(1.05);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.modal-footer button:active {
+    transform: scale(1);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 @media (max-width: 600px) {
