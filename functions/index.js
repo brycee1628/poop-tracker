@@ -57,21 +57,27 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
         const name = countMatch[1];
         const ref = db.ref(`poopCounter/${name}`);
 
-        // 獲取當前日期，使用台北時區
+        // 獲取當前日期和時間，使用台北時區
         const now = new Date();
         // 調整為台北時區 (UTC+8)
         const taipeiTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
         const year = taipeiTime.getUTCFullYear();
         const month = String(taipeiTime.getUTCMonth() + 1).padStart(2, '0');
         const day = String(taipeiTime.getUTCDate()).padStart(2, '0');
+        const hour = String(taipeiTime.getUTCHours()).padStart(2, '0');
+        const minute = String(taipeiTime.getUTCMinutes()).padStart(2, '0');
         const dateString = `${year}-${month}-${day}`;
+        const timeString = `${hour}:${minute}`;
 
         await ref.transaction((current) => {
           if (!current) {
             return {
               count: 1,
               dailyRecords: {
-                [dateString]: 1
+                [dateString]: {
+                  count: 1,
+                  times: [timeString]
+                }
               }
             };
           }
@@ -81,14 +87,37 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
             return {
               count: current + 1,
               dailyRecords: {
-                [dateString]: 1
+                [dateString]: {
+                  count: 1,
+                  times: [timeString]
+                }
               }
             };
           }
 
           // 新數據格式
           const newDailyRecords = { ...(current.dailyRecords || {}) };
-          newDailyRecords[dateString] = (newDailyRecords[dateString] || 0) + 1;
+
+          // 檢查當日記錄是否存在
+          if (!newDailyRecords[dateString]) {
+            // 如果當天沒有記錄，創建新的
+            newDailyRecords[dateString] = {
+              count: 1,
+              times: [timeString]
+            };
+          } else if (typeof newDailyRecords[dateString] === 'number') {
+            // 如果是舊格式（純數字），轉換為新格式
+            newDailyRecords[dateString] = {
+              count: newDailyRecords[dateString] + 1,
+              times: [timeString]
+            };
+          } else {
+            // 如果是新格式，更新計數和時間
+            newDailyRecords[dateString] = {
+              count: (newDailyRecords[dateString].count || 0) + 1,
+              times: [...(newDailyRecords[dateString].times || []), timeString]
+            };
+          }
 
           return {
             ...current,
@@ -143,7 +172,7 @@ exports.monthlyReset = onSchedule(
       // 檢查是否已經備份過這個月份
       const backupRef = db.ref(`monthlyHistory/${backupYear}-${monthString}`);
       const existingBackup = await backupRef.once("value");
-      
+
       if (existingBackup.exists()) {
         console.log(`⚠️ ${backupYear}-${monthString} 已經備份過，跳過重複備份`);
         return null;
@@ -178,7 +207,7 @@ exports.monthlyReset = onSchedule(
 
       console.log(`✅ 已重置排行榜，保留 ${Object.keys(resetData).length} 位用戶的宣言`);
       console.log(`📊 重置的用戶: ${Object.keys(resetData).join(', ')}`);
-      
+
       return null;
     } catch (error) {
       console.error("❌ 月底結算發生錯誤:", error);
