@@ -1,0 +1,12 @@
+{
+    "rules": {
+        "poopCounter": {
+            ".read": true,
+            ".write": true
+        },
+        "monthlyHistory": {
+            ".read": true,
+            ".write": false
+        }
+    }
+}

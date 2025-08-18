@@ -51,6 +51,25 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
         continue;
       }
 
+      // 處理刪除指令
+      const deleteMatch = msg.match(/^(.+?)\s+delete$/i);
+      if (deleteMatch) {
+        const name = deleteMatch[1].trim();
+        const userRef = db.ref(`poopCounter/${name}`);
+
+        // 檢查用戶是否存在
+        const userSnapshot = await userRef.once("value");
+        if (userSnapshot.exists()) {
+          // 刪除用戶資料
+          await userRef.remove();
+          console.log(`🗑️ 已刪除用戶: ${name}`);
+        } else {
+          console.log(`⚠️ 用戶不存在: ${name}`);
+        }
+
+        continue;
+      }
+
       // 處理 +1 計數
       const countMatch = msg.match(/^(.+?)\s*\+1$/);
       if (countMatch) {
@@ -59,13 +78,13 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
 
         // 獲取當前日期和時間，使用台北時區
         const now = new Date();
-        // 調整為台北時區 (UTC+8)
-        const taipeiTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-        const year = taipeiTime.getUTCFullYear();
-        const month = String(taipeiTime.getUTCMonth() + 1).padStart(2, '0');
-        const day = String(taipeiTime.getUTCDate()).padStart(2, '0');
-        const hour = String(taipeiTime.getUTCHours()).padStart(2, '0');
-        const minute = String(taipeiTime.getUTCMinutes()).padStart(2, '0');
+        // 使用台北時區 (UTC+8)
+        const taipeiTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" }));
+        const year = taipeiTime.getFullYear();
+        const month = String(taipeiTime.getMonth() + 1).padStart(2, '0');
+        const day = String(taipeiTime.getDate()).padStart(2, '0');
+        const hour = String(taipeiTime.getHours()).padStart(2, '0');
+        const minute = String(taipeiTime.getMinutes()).padStart(2, '0');
         const dateString = `${year}-${month}-${day}`;
         const timeString = `${hour}:${minute}`;
 
@@ -145,16 +164,16 @@ exports.monthlyReset = onSchedule(
     try {
       // 獲取台北時區的當前日期
       const now = new Date();
-      // 調整為台北時區 (UTC+8)
-      const taipeiTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+      // 使用台北時區 (UTC+8)
+      const taipeiTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" }));
 
       // 計算上個月的年份和月份
       const lastMonthDate = new Date(taipeiTime);
-      lastMonthDate.setUTCDate(1); // 設置為當月1號
-      lastMonthDate.setUTCMonth(lastMonthDate.getUTCMonth() - 1); // 減去一個月
+      lastMonthDate.setDate(1); // 設置為當月1號
+      lastMonthDate.setMonth(lastMonthDate.getMonth() - 1); // 減去一個月
 
-      const backupYear = lastMonthDate.getUTCFullYear();
-      const backupMonth = lastMonthDate.getUTCMonth() + 1; // 月份從0開始，所以+1
+      const backupYear = lastMonthDate.getFullYear();
+      const backupMonth = lastMonthDate.getMonth() + 1; // 月份從0開始，所以+1
       const monthString = String(backupMonth).padStart(2, "0");
 
       console.log(`🗓️ 當前台北時間: ${taipeiTime.toISOString()}`);
