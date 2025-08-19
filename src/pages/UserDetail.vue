@@ -42,6 +42,9 @@
                     </div>
                 </div>
             </div>
+
+            <!-- 成就系统 -->
+            <Achievement :achievements="userAchievements" />
         </div>
 
         <!-- 當日詳細時間彈窗 -->
@@ -74,6 +77,8 @@
 import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { database, ref as dbRef, onValue, get } from '../firebase';
+import Achievement from '../components/Achievement.vue';
+import { getUserAchievements, checkNewAchievements, showAchievementNotification, addAchievementNotificationStyles, initializeHistoricalAchievements } from '../utils/achievements';
 
 const route = useRoute();
 const router = useRouter();
@@ -87,6 +92,8 @@ const historicalTotal = ref(0);
 const isFromHistory = ref(false); // 判断是否从历史页面进入
 const showTimeModal = ref(false);
 const selectedDay = ref(null);
+const userAchievements = ref([]);
+const previousAchievements = ref([]);
 
 const currentMonthCount = computed(() => {
     return userData.value?.count || 0;
@@ -321,6 +328,9 @@ async function fetchMonthData() {
         // 重新計算歷史總計，確保數據正確
         await fetchHistoricalTotal();
     }
+
+    // 更新成就
+    updateAchievements();
 }
 
 function goBack() {
@@ -330,6 +340,29 @@ function goBack() {
 function showDayDetails(day) {
     selectedDay.value = day;
     showTimeModal.value = true;
+}
+
+// 更新用户成就
+async function updateAchievements() {
+    // 保存之前的成就状态
+    previousAchievements.value = [...userAchievements.value];
+
+    // 获取当前成就
+    userAchievements.value = await getUserAchievements(userData.value, userData.value);
+
+    // 检查是否有新解锁的成就
+    const newAchievements = await checkNewAchievements(previousAchievements.value, userAchievements.value, userData.value, userName);
+
+    // 显示新解锁成就的通知
+    newAchievements.forEach(achievement => {
+        showAchievementNotification(achievement);
+    });
+}
+
+// 初始化成就系统
+function initAchievementSystem() {
+    addAchievementNotificationStyles();
+    updateAchievements();
 }
 
 onMounted(async () => {
@@ -357,6 +390,12 @@ onMounted(async () => {
 
     // 獲取歷史總計
     await fetchHistoricalTotal();
+
+    // 初始化歷史成就（檢查以前達到過50次的用戶）
+    await initializeHistoricalAchievements();
+
+    // 初始化成就系统
+    initAchievementSystem();
 });
 </script>
 
