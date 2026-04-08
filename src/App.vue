@@ -87,12 +87,25 @@ function isLineInAppBrowser() {
   return /Line\//i.test(navigator.userAgent || '');
 }
 
-/** 內建瀏覽器常導致 Firebase redirect 的 sessionStorage 無法延續（missing initial state） */
+/** App 內建 WebView */
 function isLikelyInAppOrEmbeddedBrowser() {
   const ua = navigator.userAgent || '';
   if (/Line\//i.test(ua)) return true;
-  if (/FBAN|FBAV|FBIOS|Instagram|Line\/|MicroMessenger/i.test(ua)) return true;
+  if (/FBAN|FBAV|FBIOS|Instagram|MicroMessenger/i.test(ua)) return true;
   return false;
+}
+
+/**
+ * 手機版 Safari／Chrome 若改走 signInWithRedirect，也常出現 firebaseapp.com「missing initial state」
+ * （與是否 LINE 內建無關）。手機一律不要用 redirect fallback。
+ */
+function isMobilePhoneOrTablet() {
+  const ua = navigator.userAgent || '';
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+}
+
+function shouldNeverUseRedirectAuth() {
+  return isLikelyInAppOrEmbeddedBrowser() || isMobilePhoneOrTablet();
 }
 
 function openWithLiffUrl() {
@@ -339,9 +352,9 @@ async function loginWithLine() {
       return;
     }
     if (error?.code === 'auth/popup-blocked') {
-      if (isLikelyInAppOrEmbeddedBrowser()) {
+      if (shouldNeverUseRedirectAuth()) {
         authError.value =
-          '彈窗被擋下，且內建瀏覽器無法安全使用轉址登入。請用 Safari／Chrome 開啟本站網址後再登入（LINE 內請選「在瀏覽器中開啟」）。';
+          '手機／內建瀏覽器不適合「轉址登入」，若改走轉址會卡在 firebaseapp.com（missing initial state）。請在 Safari／Chrome 設定中允許此網站「彈出式視窗」，然後再按一次登入；或改用電腦版瀏覽器登入。LINE 內請用「在瀏覽器中開啟」到 Safari 再登入。';
         return;
       }
       await signInWithLineRedirect();

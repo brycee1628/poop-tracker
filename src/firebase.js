@@ -3,6 +3,9 @@ import { initializeApp } from "firebase/app";
 import { getDatabase, ref, onValue, set, get, remove, update } from "firebase/database";
 import {
     getAuth,
+    initializeAuth,
+    browserLocalPersistence,
+    indexedDBLocalPersistence,
     OAuthProvider,
     signInWithPopup,
     signInWithRedirect,
@@ -28,7 +31,19 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const database = getDatabase(app);
-const auth = getAuth(app);
+
+/** 用 indexedDB 優先，部分環境比預設 session 更不易丟 redirect 狀態（仍建議手機只用 popup、勿 fallback redirect） */
+function createAuth(appInstance) {
+    try {
+        return initializeAuth(appInstance, {
+            persistence: [indexedDBLocalPersistence, browserLocalPersistence]
+        });
+    } catch {
+        return getAuth(appInstance);
+    }
+}
+
+const auth = createAuth(app);
 const lineProviderId = import.meta.env.VITE_LINE_PROVIDER_ID || "oidc.line";
 const lineProvider = new OAuthProvider(lineProviderId);
 
