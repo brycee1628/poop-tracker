@@ -61,6 +61,22 @@ onMounted(async () => {
 
 async function loginWithLine() {
   authError.value = '';
+  const userAgent = navigator.userAgent || '';
+  const isLineInAppBrowser = /Line\//i.test(userAgent);
+  const isMobile = /Android|iPhone|iPad|iPod/i.test(userAgent);
+
+  // LINE 內建瀏覽器與手機端優先使用 redirect，避免 popup 被封鎖。
+  if (isLineInAppBrowser || isMobile) {
+    try {
+      await signInWithLineRedirect();
+      return;
+    } catch (error) {
+      authError.value = 'LINE 登入失敗，請稍後再試。';
+      console.error(error);
+      return;
+    }
+  }
+
   try {
     await signInWithLinePopup();
   } catch (error) {
