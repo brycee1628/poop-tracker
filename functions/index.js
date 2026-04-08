@@ -246,6 +246,15 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
           }
           const lineBindingSnapshot = await db.ref(`lineUsers/${lineUserId}`).once("value");
           const lineBinding = lineBindingSnapshot.val();
+          // 若有 firebaseUid，優先寫入新路徑，確保不同登入方式 +1 行為一致
+          if (lineBinding?.firebaseUid) {
+            const countResult = await incrementCounterAtPath(`poopCounterByUser/${lineBinding.firebaseUid}`);
+            await notifyLineUser(
+              event,
+              `✅ ${lineBinding?.name || "你"} +1 成功\n今日第 ${countResult.todayCount} 次，本月累計 ${countResult.totalCount} 次`
+            );
+            continue;
+          }
           targetName = lineBinding?.name || null;
           if (!targetName) {
             console.log(`⚠️ +1 找不到綁定名稱: ${lineUserId}`);

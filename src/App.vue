@@ -101,6 +101,19 @@ async function initLiffLoginIfNeeded() {
       userId: profile.userId,
       displayName: profile.displayName
     };
+
+    // LIFF 登入成功後，若尚未綁定名稱則顯示綁定面板
+    const lineBindingSnapshot = await get(dbRef(database, `lineUsers/${profile.userId}`));
+    const lineBinding = lineBindingSnapshot.val();
+    if (!lineBinding?.name) {
+      const legacySnapshot = await get(dbRef(database, 'poopCounter'));
+      const legacyData = legacySnapshot.val() || {};
+      unlinkedLegacyNames.value = Object.keys(legacyData);
+      if (unlinkedLegacyNames.value.length > 0) {
+        selectedLegacyName.value = unlinkedLegacyNames.value[0];
+        showLinkModal.value = true;
+      }
+    }
   } catch (error) {
     console.error(error);
     authError.value = 'LINE 內建瀏覽器登入失敗，請改用外部瀏覽器開啟。';
@@ -168,12 +181,10 @@ onMounted(async () => {
 
 async function loginWithLine() {
   authError.value = '';
-  const userAgent = navigator.userAgent || '';
   const inLineBrowser = isLineInAppBrowser();
-  const isMobile = /Android|iPhone|iPad|iPod/i.test(userAgent);
 
-  // LINE 內建瀏覽器與手機端優先使用 redirect，避免 popup 被封鎖。
-  if (inLineBrowser || isMobile) {
+  // 僅 LINE 內建瀏覽器走 LIFF/redirect；外部瀏覽器優先 popup，避免 missing initial state。
+  if (inLineBrowser) {
     if (inLineBrowser && !import.meta.env.VITE_LIFF_ID) {
       authError.value = 'LINE 內建瀏覽器建議使用 LIFF，請先設定 VITE_LIFF_ID。';
       return;
@@ -260,45 +271,56 @@ async function ensureUserLinkState(user) {
 }
 
 async function linkSelectedLegacyData() {
-  if (!currentUser.value || !selectedLegacyName.value) return;
+  if ((!currentUser.value && !liffProfile.value) || !selectedLegacyName.value) return;
 
   linking.value = true;
   linkError.value = '';
-  const uid = currentUser.value.uid;
   const legacyName = selectedLegacyName.value;
 
   try {
-    const legacyRef = dbRef(database, `poopCounter/${legacyName}`);
-    const uidRef = dbRef(database, `poopCounterByUser/${uid}`);
-    const userProfileRef = dbRef(database, `users/${uid}`);
-    const nameMapRef = dbRef(database, `nameToUid/${legacyName}`);
+    if (currentUser.value) {
+      const uid = currentUser.value.uid;
+      const legacyRef = dbRef(database, `poopCounter/${legacyName}`);
+      const uidRef = dbRef(database, `poopCounterByUser/${uid}`);
+      const userProfileRef = dbRef(database, `users/${uid}`);
+      const nameMapRef = dbRef(database, `nameToUid/${legacyName}`);
 
-    const [legacySnapshot, uidSnapshot] = await Promise.all([
-      get(legacyRef),
-      get(uidRef)
-    ]);
+      const [legacySnapshot, uidSnapshot] = await Promise.all([
+        get(legacyRef),
+        get(uidRef)
+      ]);
 
-    const legacyData = legacySnapshot.val();
-    const uidData = uidSnapshot.val();
+      const legacyData = legacySnapshot.val();
+      const uidData = uidSnapshot.val();
 
-    if (legacyData === null) {
-      throw new Error('找不到舊資料，可能已被綁定。');
-    }
+      if (legacyData === null) {
+        throw new Error('找不到舊資料，可能已被綁定。');
+      }
 
-    if (uidData === null) {
-      await set(uidRef, legacyData);
-    }
+      if (uidData === null) {
+        await set(uidRef, legacyData);
+      }
 
-    await Promise.all([
-      remove(legacyRef),
-      set(nameMapRef, uid),
-      set(userProfileRef, {
-        displayName: currentUser.value.displayName || null,
-        legacyName,
+      await Promise.all([
+        remove(legacyRef),
+        set(nameMapRef, uid),
+        set(userProfileRef, {
+          displayName: currentUser.value.displayName || null,
+          legacyName,
+          updatedAt: Date.now()
+        })
+      ]);
+      await syncLineUserBinding(currentUser.value, legacyName);
+    } else if (liffProfile.value?.userId) {
+      // LIFF-only 綁定：若名稱已對應 firebase uid，寫入同一 uid，讓 +1 路徑與 Firebase 登入一致
+      const uidSnapshot = await get(dbRef(database, `nameToUid/${legacyName}`));
+      const mappedUid = uidSnapshot.val() || null;
+      await set(dbRef(database, `lineUsers/${liffProfile.value.userId}`), {
+        name: legacyName,
+        firebaseUid: mappedUid,
         updatedAt: Date.now()
-      })
-    ]);
-    await syncLineUserBinding(currentUser.value, legacyName);
+      });
+    }
 
     showLinkModal.value = false;
   } catch (error) {
@@ -309,13 +331,19 @@ async function linkSelectedLegacyData() {
 }
 
 async function skipLinkForNow() {
-  if (!currentUser.value) return;
-  await set(dbRef(database, `users/${currentUser.value.uid}`), {
-    displayName: currentUser.value.displayName || null,
-    legacyName: null,
-    updatedAt: Date.now()
-  });
-  await syncLineUserBinding(currentUser.value, currentUser.value.displayName || null);
+  if (currentUser.value) {
+    await set(dbRef(database, `users/${currentUser.value.uid}`), {
+      displayName: currentUser.value.displayName || null,
+      legacyName: null,
+      updatedAt: Date.now()
+    });
+    await syncLineUserBinding(currentUser.value, currentUser.value.displayName || null);
+  } else if (liffProfile.value?.userId) {
+    await set(dbRef(database, `lineUsers/${liffProfile.value.userId}`), {
+      name: liffProfile.value.displayName || null,
+      updatedAt: Date.now()
+    });
+  }
   showLinkModal.value = false;
 }
 </script>
