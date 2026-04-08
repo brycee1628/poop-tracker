@@ -1,7 +1,8 @@
 <script setup>
 import NavBar from './components/NavBar.vue';
 import Footer from './components/Footer.vue';
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
+import liff from '@line/liff';
 import {
   auth,
   onAuthStateChanged,
@@ -23,6 +24,47 @@ const linking = ref(false);
 const linkError = ref('');
 const unlinkedLegacyNames = ref([]);
 const selectedLegacyName = ref('');
+const liffProfile = ref(null);
+
+const displayUserName = computed(() => {
+  if (currentUser.value) {
+    return currentUser.value.displayName || currentUser.value.email || currentUser.value.uid;
+  }
+  if (liffProfile.value) {
+    return `${liffProfile.value.displayName} (LINE)`;
+  }
+  return '';
+});
+
+function isLineInAppBrowser() {
+  return /Line\//i.test(navigator.userAgent || '');
+}
+
+async function initLiffLoginIfNeeded() {
+  if (!isLineInAppBrowser()) return;
+
+  const liffId = import.meta.env.VITE_LIFF_ID;
+  if (!liffId) {
+    authError.value = 'LINE 內建瀏覽器請先設定 LIFF ID（VITE_LIFF_ID）。';
+    return;
+  }
+
+  try {
+    await liff.init({ liffId });
+    if (!liff.isLoggedIn()) {
+      liff.login({ redirectUri: window.location.href });
+      return;
+    }
+    const profile = await liff.getProfile();
+    liffProfile.value = {
+      userId: profile.userId,
+      displayName: profile.displayName
+    };
+  } catch (error) {
+    console.error(error);
+    authError.value = 'LINE 內建瀏覽器登入失敗，請改用外部瀏覽器開啟。';
+  }
+}
 
 function getLineProviderUid(user) {
   const provider = user?.providerData?.find((item) => item.providerId?.startsWith('oidc.'));
@@ -40,6 +82,8 @@ async function syncLineUserBinding(user, boundName) {
 }
 
 onMounted(async () => {
+  await initLiffLoginIfNeeded();
+
   try {
     await getLineRedirectResult();
   } catch (error) {
@@ -62,11 +106,15 @@ onMounted(async () => {
 async function loginWithLine() {
   authError.value = '';
   const userAgent = navigator.userAgent || '';
-  const isLineInAppBrowser = /Line\//i.test(userAgent);
+  const inLineBrowser = isLineInAppBrowser();
   const isMobile = /Android|iPhone|iPad|iPod/i.test(userAgent);
 
   // LINE 內建瀏覽器與手機端優先使用 redirect，避免 popup 被封鎖。
-  if (isLineInAppBrowser || isMobile) {
+  if (inLineBrowser || isMobile) {
+    if (inLineBrowser && !import.meta.env.VITE_LIFF_ID) {
+      authError.value = 'LINE 內建瀏覽器建議使用 LIFF，請先設定 VITE_LIFF_ID。';
+      return;
+    }
     try {
       await signInWithLineRedirect();
       return;
@@ -90,7 +138,20 @@ async function loginWithLine() {
 }
 
 async function logout() {
-  await signOutAuth();
+  if (currentUser.value) {
+    await signOutAuth();
+    return;
+  }
+
+  if (liffProfile.value) {
+    try {
+      liff.logout();
+    } catch (error) {
+      console.error(error);
+    }
+    liffProfile.value = null;
+    window.location.reload();
+  }
 }
 
 async function ensureUserLinkState(user) {
@@ -193,7 +254,11 @@ async function skipLinkForNow() {
     ]">
       <template #right>
         <template v-if="currentUser">
-          <span class="auth-text">{{ currentUser.displayName || currentUser.email || currentUser.uid }}</span>
+          <span class="auth-text">{{ displayUserName }}</span>
+          <button class="auth-button logout" @click="logout">登出</button>
+        </template>
+        <template v-else-if="liffProfile">
+          <span class="auth-text">{{ displayUserName }}</span>
           <button class="auth-button logout" @click="logout">登出</button>
         </template>
         <template v-else>
