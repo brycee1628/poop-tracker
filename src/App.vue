@@ -5,7 +5,7 @@ import { computed, onMounted, ref } from 'vue';
 import liff from '@line/liff';
 import {
   auth,
-  onAuthStateChanged,
+  onIdTokenChanged,
   signInWithLinePopup,
   signInWithLineRedirect,
   getLineRedirectResult,
@@ -25,6 +25,33 @@ const linkError = ref('');
 const unlinkedLegacyNames = ref([]);
 const selectedLegacyName = ref('');
 const liffProfile = ref(null);
+const isLoggedIn = computed(() => !!currentUser.value || !!liffProfile.value);
+
+function syncAuthUserNow() {
+  if (auth.currentUser) {
+    currentUser.value = auth.currentUser;
+  }
+}
+
+async function waitAndSyncAuthUser() {
+  try {
+    if (typeof auth.authStateReady === 'function') {
+      await auth.authStateReady();
+    }
+  } catch (error) {
+    console.error(error);
+  }
+
+  // 補一段短輪詢，避免 OAuth 回跳後事件延遲
+  for (let i = 0; i < 8; i += 1) {
+    if (auth.currentUser) {
+      currentUser.value = auth.currentUser;
+      return auth.currentUser;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  return null;
+}
 
 const displayUserName = computed(() => {
   if (currentUser.value) {
@@ -46,6 +73,14 @@ function openWithLiffUrl() {
   window.location.href = `https://liff.line.me/${liffId}`;
 }
 
+function handleLoginEntry() {
+  if (isLineInAppBrowser() && import.meta.env.VITE_LIFF_ID) {
+    openWithLiffUrl();
+    return;
+  }
+  loginWithLine();
+}
+
 async function initLiffLoginIfNeeded() {
   if (!isLineInAppBrowser()) return;
 
@@ -58,7 +93,7 @@ async function initLiffLoginIfNeeded() {
   try {
     await liff.init({ liffId });
     if (!liff.isLoggedIn()) {
-      authError.value = '請點「使用 LINE 開啟」完成登入。';
+      authError.value = '';
       return;
     }
     const profile = await liff.getProfile();
@@ -91,22 +126,44 @@ onMounted(async () => {
   await initLiffLoginIfNeeded();
 
   try {
-    await getLineRedirectResult();
+    const redirectResult = await getLineRedirectResult();
+    if (redirectResult?.user) {
+      currentUser.value = redirectResult.user;
+      await ensureUserLinkState(redirectResult.user);
+    }
+    await waitAndSyncAuthUser();
   } catch (error) {
     authError.value = 'LINE 登入失敗，請再試一次。';
     console.error(error);
   }
 
-  onAuthStateChanged(auth, (user) => {
+  // 先同步目前登入狀態，避免 UI 卡在舊按鈕
+  if (auth.currentUser) {
+    currentUser.value = auth.currentUser;
+    try {
+      await ensureUserLinkState(auth.currentUser);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  onIdTokenChanged(auth, async (user) => {
     currentUser.value = user;
     if (user) {
-      ensureUserLinkState(user);
+      try {
+        await ensureUserLinkState(user);
+      } catch (error) {
+        console.error(error);
+      }
     } else {
       showLinkModal.value = false;
       unlinkedLegacyNames.value = [];
       selectedLegacyName.value = '';
     }
   });
+
+  // 某些瀏覽器在 OAuth 回跳後不會即時刷新 UI，回焦點時主動同步一次
+  window.addEventListener('focus', syncAuthUserNow);
 });
 
 async function loginWithLine() {
@@ -135,8 +192,16 @@ async function loginWithLine() {
     }
   }
 
+  // 桌機優先 popup，若被擋再 fallback redirect。
   try {
-    await signInWithLinePopup();
+    const popupResult = await signInWithLinePopup();
+    const resolvedUser = popupResult?.user || (await waitAndSyncAuthUser());
+    if (resolvedUser) {
+      currentUser.value = resolvedUser;
+      await ensureUserLinkState(resolvedUser);
+      syncAuthUserNow();
+      return;
+    }
   } catch (error) {
     if (error?.code === 'auth/popup-blocked' || error?.code === 'auth/operation-not-supported-in-this-environment') {
       await signInWithLineRedirect();
@@ -263,23 +328,16 @@ async function skipLinkForNow() {
       { id: 2, pageName: '聖域', url: '/gacha' },
     ]">
       <template #right>
-        <template v-if="currentUser">
-          <span class="auth-text">{{ displayUserName }}</span>
-          <button class="auth-button logout" @click="logout">登出</button>
-        </template>
-        <template v-else-if="liffProfile">
+        <template v-if="isLoggedIn">
           <span class="auth-text">{{ displayUserName }}</span>
           <button class="auth-button logout" @click="logout">登出</button>
         </template>
         <template v-else>
-          <button class="auth-button" @click="loginWithLine">登入</button>
+          <button class="auth-button" @click="handleLoginEntry">登入</button>
         </template>
       </template>
     </NavBar>
     <p v-if="authError" class="auth-error">{{ authError }}</p>
-    <div v-if="isLineInAppBrowser() && !liffProfile && !currentUser" class="liff-help">
-      <button class="auth-button" @click="openWithLiffUrl">使用 LINE 開啟</button>
-    </div>
     <div v-if="showLinkModal" class="link-modal-mask">
       <div class="link-modal">
         <h3>綁定舊資料</h3>
@@ -339,13 +397,6 @@ async function skipLinkForNow() {
   width: min(920px, calc(100% - 32px));
   color: #d93025;
   font-size: 14px;
-}
-
-.liff-help {
-  margin: 0 auto 12px;
-  width: min(920px, calc(100% - 32px));
-  display: flex;
-  justify-content: center;
 }
 
 .link-modal-mask {

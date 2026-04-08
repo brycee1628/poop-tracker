@@ -8,7 +8,8 @@ import {
     signInWithRedirect,
     getRedirectResult,
     signOut,
-    onAuthStateChanged
+    onAuthStateChanged,
+    onIdTokenChanged
 } from "firebase/auth";
 // TODO: Add SDKs for Firebase products that you want to use
 // https://firebase.google.com/docs/web/setup#available-libraries
@@ -45,6 +46,7 @@ export {
     remove,
     auth,
     onAuthStateChanged,
+    onIdTokenChanged,
     signInWithLinePopup,
     signInWithLineRedirect,
     getLineRedirectResult,
