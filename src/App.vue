@@ -25,6 +25,7 @@ const linkError = ref('');
 const unlinkedLegacyNames = ref([]);
 const selectedLegacyName = ref('');
 const liffProfile = ref(null);
+const needsBinding = ref(false);
 const isLoggedIn = computed(() => !!currentUser.value || !!liffProfile.value);
 
 function syncAuthUserNow() {
@@ -101,18 +102,21 @@ async function initLiffLoginIfNeeded() {
       userId: profile.userId,
       displayName: profile.displayName
     };
+    authError.value = '';
 
     // LIFF 登入成功後，若尚未綁定名稱則顯示綁定面板
     const lineBindingSnapshot = await get(dbRef(database, `lineUsers/${profile.userId}`));
     const lineBinding = lineBindingSnapshot.val();
     if (!lineBinding?.name) {
+      needsBinding.value = true;
       const legacySnapshot = await get(dbRef(database, 'poopCounter'));
       const legacyData = legacySnapshot.val() || {};
       unlinkedLegacyNames.value = Object.keys(legacyData);
       if (unlinkedLegacyNames.value.length > 0) {
         selectedLegacyName.value = unlinkedLegacyNames.value[0];
-        showLinkModal.value = true;
       }
+    } else {
+      needsBinding.value = false;
     }
   } catch (error) {
     console.error(error);
@@ -163,6 +167,7 @@ onMounted(async () => {
   onIdTokenChanged(auth, async (user) => {
     currentUser.value = user;
     if (user) {
+      authError.value = '';
       try {
         await ensureUserLinkState(user);
       } catch (error) {
@@ -245,9 +250,20 @@ async function ensureUserLinkState(user) {
   const userProfileRef = dbRef(database, `users/${user.uid}`);
   const userProfileSnapshot = await get(userProfileRef);
   const userProfile = userProfileSnapshot.val() || {};
+  const lineUid = getLineProviderUid(user);
+  let lineBinding = null;
+  if (lineUid) {
+    const lineBindingSnapshot = await get(dbRef(database, `lineUsers/${lineUid}`));
+    lineBinding = lineBindingSnapshot.val();
+  }
 
-  if (userProfile.legacyName) {
-    await syncLineUserBinding(user, userProfile.legacyName);
+  // users 或 lineUsers 任一已有綁定，都視為已綁定
+  if (userProfile.legacyName || lineBinding?.name) {
+    const boundName = userProfile.legacyName || lineBinding?.name;
+    if (boundName) {
+      await syncLineUserBinding(user, boundName);
+    }
+    needsBinding.value = false;
     showLinkModal.value = false;
     return;
   }
@@ -257,8 +273,9 @@ async function ensureUserLinkState(user) {
   unlinkedLegacyNames.value = Object.keys(legacyData);
 
   if (unlinkedLegacyNames.value.length > 0) {
+    needsBinding.value = true;
     selectedLegacyName.value = unlinkedLegacyNames.value[0];
-    showLinkModal.value = true;
+    showLinkModal.value = false;
   } else {
     await set(userProfileRef, {
       displayName: user.displayName || null,
@@ -266,6 +283,7 @@ async function ensureUserLinkState(user) {
       updatedAt: Date.now()
     });
     await syncLineUserBinding(user, user.displayName || null);
+    needsBinding.value = false;
     showLinkModal.value = false;
   }
 }
@@ -322,6 +340,7 @@ async function linkSelectedLegacyData() {
       });
     }
 
+    needsBinding.value = false;
     showLinkModal.value = false;
   } catch (error) {
     linkError.value = error.message || '綁定失敗，請稍後再試。';
@@ -344,7 +363,21 @@ async function skipLinkForNow() {
       updatedAt: Date.now()
     });
   }
+  needsBinding.value = false;
   showLinkModal.value = false;
+}
+
+async function openBindingSelector() {
+  linkError.value = '';
+  const legacySnapshot = await get(dbRef(database, 'poopCounter'));
+  const legacyData = legacySnapshot.val() || {};
+  unlinkedLegacyNames.value = Object.keys(legacyData);
+  if (unlinkedLegacyNames.value.length > 0) {
+    selectedLegacyName.value = unlinkedLegacyNames.value[0];
+    showLinkModal.value = true;
+  } else {
+    linkError.value = '目前沒有可綁定的歷史名稱。';
+  }
 }
 </script>
 
@@ -358,6 +391,7 @@ async function skipLinkForNow() {
       <template #right>
         <template v-if="isLoggedIn">
           <span class="auth-text">{{ displayUserName }}</span>
+          <button v-if="needsBinding" class="auth-button secondary" @click="openBindingSelector">綁定ID</button>
           <button class="auth-button logout" @click="logout">登出</button>
         </template>
         <template v-else>
@@ -365,7 +399,7 @@ async function skipLinkForNow() {
         </template>
       </template>
     </NavBar>
-    <p v-if="authError" class="auth-error">{{ authError }}</p>
+    <p v-if="authError && !isLoggedIn" class="auth-error">{{ authError }}</p>
     <div v-if="showLinkModal" class="link-modal-mask">
       <div class="link-modal">
         <h3>綁定舊資料</h3>
@@ -418,6 +452,10 @@ async function skipLinkForNow() {
 
 .auth-button.logout {
   background-color: #555;
+}
+
+.auth-button.secondary {
+  background-color: #888;
 }
 
 .auth-error {
