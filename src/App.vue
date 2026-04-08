@@ -54,9 +54,12 @@ async function initLiffLoginIfNeeded() {
     query.has('liff.state') ||
     query.has('liffClientId') ||
     query.has('access_token');
+  const redirectedKey = 'liff_redirected_once';
+  const redirectedOnce = sessionStorage.getItem(redirectedKey) === '1';
 
   // 若是從一般網址進 LINE 內建瀏覽器，先導到 LIFF URL，避免走到易失敗的一般 OAuth 流程。
-  if (!hasLiffContext) {
+  if (!hasLiffContext && !redirectedOnce) {
+    sessionStorage.setItem(redirectedKey, '1');
     window.location.replace(`https://liff.line.me/${liffId}`);
     return;
   }
@@ -72,6 +75,7 @@ async function initLiffLoginIfNeeded() {
       userId: profile.userId,
       displayName: profile.displayName
     };
+    sessionStorage.removeItem(redirectedKey);
   } catch (error) {
     console.error(error);
     authError.value = 'LINE 內建瀏覽器登入失敗，請改用外部瀏覽器開啟。';
