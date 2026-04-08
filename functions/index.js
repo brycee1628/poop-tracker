@@ -104,6 +104,46 @@ function buildNowInTaipei() {
   };
 }
 
+function normalizePoopNode(val) {
+  if (val == null) return { count: 0, declaration: null, dailyRecords: {} };
+  if (typeof val === "number") {
+    return { count: val, declaration: null, dailyRecords: {} };
+  }
+  return {
+    count: val.count || 0,
+    declaration: val.declaration || null,
+    dailyRecords: val.dailyRecords && typeof val.dailyRecords === "object" ? val.dailyRecords : {},
+  };
+}
+
+function mergeDailyRecords(base = {}, incoming = {}) {
+  const merged = { ...base };
+  Object.entries(incoming).forEach(([date, record]) => {
+    const baseEntry = merged[date];
+    const baseObj =
+      typeof baseEntry === "number"
+        ? { count: baseEntry, times: [] }
+        : baseEntry || { count: 0, times: [] };
+    const incObj =
+      typeof record === "number" ? { count: record, times: [] } : record || { count: 0, times: [] };
+    merged[date] = {
+      count: (baseObj.count || 0) + (incObj.count || 0),
+      times: [...(baseObj.times || []), ...(incObj.times || [])],
+    };
+  });
+  return merged;
+}
+
+function mergePoopNodes(existingVal, legacyVal) {
+  const a = normalizePoopNode(existingVal);
+  const b = normalizePoopNode(legacyVal);
+  return {
+    count: (a.count || 0) + (b.count || 0),
+    declaration: a.declaration || b.declaration || null,
+    dailyRecords: mergeDailyRecords(a.dailyRecords, b.dailyRecords),
+  };
+}
+
 async function incrementCounterAtPath(path) {
   const targetRef = db.ref(path);
   const { dateString, timeString } = buildNowInTaipei();
@@ -173,6 +213,89 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
   for (const event of events) {
     if (event.type === "message" && event.message.type === "text") {
       const msg = event.message.text.trim();
+
+      // 繼承舊排行榜：繼承 舊名稱 ／ 綁定 舊名稱（需先在網站用 LINE 登入過一次，lineUsers 才有 firebaseUid）
+      const inheritMatch = msg.match(/^(?:繼承|綁定)\s+(.+)$/);
+      if (inheritMatch) {
+        const legacyName = inheritMatch[1].trim();
+        const lineUserId = event?.source?.userId;
+        if (!lineUserId) {
+          await notifyLineUser(event, "無法取得 LINE 帳號資訊，請稍後再試。");
+          continue;
+        }
+        if (!legacyName) {
+          await notifyLineUser(event, "請輸入：繼承 你的舊排行榜名稱\n例：繼承 滅世魔王");
+          continue;
+        }
+
+        const lineBindingSnap = await db.ref(`lineUsers/${lineUserId}`).once("value");
+        const lineBinding = lineBindingSnap.val();
+        const firebaseUid = lineBinding?.firebaseUid || null;
+        if (!firebaseUid) {
+          await notifyLineUser(
+            event,
+            "請先用手機／電腦瀏覽器開啟網站，用 LINE 登入一次（不用在網頁上按綁定），完成後再傳：\n繼承 " +
+              legacyName
+          );
+          continue;
+        }
+
+        const legacyRef = db.ref(`poopCounter/${legacyName}`);
+        const uidRef = db.ref(`poopCounterByUser/${firebaseUid}`);
+        const nameMapRef = db.ref(`nameToUid/${legacyName}`);
+        const userProfileRef = db.ref(`users/${firebaseUid}`);
+
+        const [legacySnap, uidSnap, mapSnap, profileSnap] = await Promise.all([
+          legacyRef.once("value"),
+          uidRef.once("value"),
+          nameMapRef.once("value"),
+          userProfileRef.once("value"),
+        ]);
+
+        const existingMapUid = mapSnap.val();
+        if (existingMapUid != null && existingMapUid !== "" && existingMapUid !== firebaseUid) {
+          await notifyLineUser(event, `「${legacyName}」已綁定其他帳號，無法繼承。`);
+          continue;
+        }
+
+        if (!legacySnap.exists()) {
+          await notifyLineUser(
+            event,
+            `找不到「${legacyName}」在未認領清單中，可能已被綁定或名稱打錯（請與排行榜上完全一致）。`
+          );
+          continue;
+        }
+
+        const legacyData = legacySnap.val();
+        const uidData = uidSnap.val();
+        const mergedForUid =
+          uidData == null ? legacyData : mergePoopNodes(uidData, legacyData);
+        const profile = profileSnap.val() || {};
+
+        const updates = {};
+        updates[`poopCounter/${legacyName}`] = null;
+        updates[`poopCounterByUser/${firebaseUid}`] = mergedForUid;
+        updates[`nameToUid/${legacyName}`] = firebaseUid;
+        updates[`users/${firebaseUid}`] = {
+          ...profile,
+          legacyName,
+          updatedAt: Date.now(),
+        };
+        updates[`lineUsers/${lineUserId}`] = {
+          name: legacyName,
+          firebaseUid,
+          linkedLegacy: true,
+          updatedAt: Date.now(),
+        };
+
+        await db.ref().update(updates);
+        console.log(`🔗 LINE 繼承成功: ${lineUserId} -> ${legacyName} (uid ${firebaseUid})`);
+        await notifyLineUser(
+          event,
+          `已將「${legacyName}」綁定到你的帳號。\n之後傳「+1」會計入網站排行榜（與登入相同）。`
+        );
+        continue;
+      }
 
       // 處理宣告設定
       const declarationMatch = msg.match(/^(.+?):(.+)$/);

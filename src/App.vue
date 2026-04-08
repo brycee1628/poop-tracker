@@ -29,6 +29,24 @@ const liffProfile = ref(null);
 const needsBinding = ref(false);
 const isLoggedIn = computed(() => !!currentUser.value || !!liffProfile.value);
 
+const LEGACY_BIND_DISMISSED_KEY = 'pt_legacyBindDismissedEmpty';
+
+function readLegacyBindDismissedEmpty() {
+  try {
+    return localStorage.getItem(LEGACY_BIND_DISMISSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function setLegacyBindDismissedEmpty() {
+  try {
+    localStorage.setItem(LEGACY_BIND_DISMISSED_KEY, '1');
+  } catch {
+    /* ignore */
+  }
+}
+
 function syncAuthUserNow() {
   if (auth.currentUser) {
     currentUser.value = auth.currentUser;
@@ -143,26 +161,29 @@ async function syncLineUserBinding(user, boundName) {
   });
 }
 
-/** 是否已完成「繼承舊排行榜」：不可僅依 lineUsers.name（可能是 LINE 暱稱或稍後再綁） */
+/**
+ * Firebase 登入：僅當 users 有 legacyName，或 lineUsers 的排行榜名在 nameToUid 指向「本人 uid」。
+ * 不可單靠 linkedLegacy（LIFF 綁定曾寫入但未必同步 nameToUid），也不可只判断 nameToUid「有值」（暱稱撞名會誤判）。
+ */
 async function isFirebaseLegacyBound(user, userProfile, lineBinding) {
   if (userProfile?.legacyName) return true;
-  if (lineBinding?.linkedLegacy === true && lineBinding?.name) return true;
   const n = lineBinding?.name;
-  if (n && user?.uid) {
-    const mapSnap = await get(dbRef(database, `nameToUid/${n}`));
-    return mapSnap.val() === user.uid;
-  }
-  return false;
+  if (!n || !user?.uid) return false;
+  const mapSnap = await get(dbRef(database, `nameToUid/${n}`));
+  return mapSnap.val() === user.uid;
 }
 
-/** LIFF：同上，並相容舊資料（有 name 且已出現在 nameToUid） */
+/**
+ * 純 LIFF：以 linkedLegacy 為準，或以 name + firebaseUid 與 nameToUid 三者一致（舊資料）。
+ * 禁止「nameToUid 只要有值就算綁定」——會與別人的排行榜名撞名時誤判。
+ */
 async function isLiffLegacyBound(lineBinding) {
   if (!lineBinding) return false;
   if (lineBinding.linkedLegacy === true && lineBinding.name) return true;
   const n = lineBinding.name;
-  if (!n) return false;
+  if (!n || lineBinding.firebaseUid == null || lineBinding.firebaseUid === '') return false;
   const mapSnap = await get(dbRef(database, `nameToUid/${n}`));
-  return mapSnap.val() != null && mapSnap.val() !== '';
+  return mapSnap.val() === lineBinding.firebaseUid;
 }
 
 /**
@@ -199,13 +220,13 @@ async function refreshLegacyBindingUi() {
   const legacyData = legacySnapshot.val() || {};
   unlinkedLegacyNames.value = Object.keys(legacyData);
   const bound = await computeLegacyBoundState();
+  const hasSlots = unlinkedLegacyNames.value.length > 0;
+  // 有待認領名稱 → 一定要能看見按鈕；若名稱清單為空，僅在「尚未手動關閉過說明」時顯示，避免全新使用者永遠被干擾
+  needsBinding.value = !bound && (hasSlots || !readLegacyBindDismissedEmpty());
   if (unlinkedLegacyNames.value.length > 0) {
-    needsBinding.value = !bound;
     if (!selectedLegacyName.value || !unlinkedLegacyNames.value.includes(selectedLegacyName.value)) {
       selectedLegacyName.value = unlinkedLegacyNames.value[0];
     }
-  } else {
-    needsBinding.value = false;
   }
 }
 
@@ -433,6 +454,12 @@ async function linkSelectedLegacyData() {
 }
 
 async function skipLinkForNow() {
+  const legacySnap = await get(dbRef(database, 'poopCounter'));
+  const noLegacySlots = Object.keys(legacySnap.val() || {}).length === 0;
+  if (noLegacySlots) {
+    setLegacyBindDismissedEmpty();
+  }
+
   if (currentUser.value) {
     await set(dbRef(database, `users/${currentUser.value.uid}`), {
       displayName: currentUser.value.displayName || null,
@@ -456,11 +483,12 @@ async function openBindingSelector() {
   const legacySnapshot = await get(dbRef(database, 'poopCounter'));
   const legacyData = legacySnapshot.val() || {};
   unlinkedLegacyNames.value = Object.keys(legacyData);
+  showLinkModal.value = true;
   if (unlinkedLegacyNames.value.length > 0) {
     selectedLegacyName.value = unlinkedLegacyNames.value[0];
-    showLinkModal.value = true;
   } else {
-    linkError.value = '目前沒有可綁定的歷史名稱。';
+    linkError.value =
+      '後端「尚未認領」的舊名稱清單為空（poopCounter 無資料）。若你確定排行榜上還有你的舊名稱，請管理員檢查 Firebase 的 poopCounter 是否已被清空，或你是否已用其他帳號綁定。';
   }
 }
 </script>
@@ -487,16 +515,25 @@ async function openBindingSelector() {
     <div v-if="showLinkModal" class="link-modal-mask">
       <div class="link-modal">
         <h3>綁定舊資料</h3>
-        <p>偵測到舊排行榜資料，請選擇你的舊名稱進行綁定。</p>
-        <select v-model="selectedLegacyName">
+        <p v-if="unlinkedLegacyNames.length > 0">
+          請從下方選擇你在舊排行榜上的名稱，以繼承次數與紀錄。
+        </p>
+        <p v-else>
+          目前沒有從伺服器載入到「尚未認領」的舊名稱。若你應該要繼承資料，請看下方紅字說明，或聯絡管理員檢查 Firebase。
+        </p>
+        <select v-if="unlinkedLegacyNames.length > 0" v-model="selectedLegacyName">
           <option v-for="name in unlinkedLegacyNames" :key="name" :value="name">
             {{ name }}
           </option>
         </select>
         <p v-if="linkError" class="link-error">{{ linkError }}</p>
         <div class="link-actions">
-          <button class="auth-button logout" :disabled="linking" @click="skipLinkForNow">稍後再綁</button>
-          <button class="auth-button" :disabled="linking || !selectedLegacyName" @click="linkSelectedLegacyData">
+          <button class="auth-button logout" :disabled="linking" @click="skipLinkForNow">關閉</button>
+          <button
+            class="auth-button"
+            :disabled="linking || unlinkedLegacyNames.length === 0 || !selectedLegacyName"
+            @click="linkSelectedLegacyData"
+          >
             {{ linking ? '綁定中...' : '確認綁定' }}
           </button>
         </div>
