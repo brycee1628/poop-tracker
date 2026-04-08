@@ -40,6 +40,12 @@ function isLineInAppBrowser() {
   return /Line\//i.test(navigator.userAgent || '');
 }
 
+function openWithLiffUrl() {
+  const liffId = import.meta.env.VITE_LIFF_ID;
+  if (!liffId) return;
+  window.location.href = `https://liff.line.me/${liffId}`;
+}
+
 async function initLiffLoginIfNeeded() {
   if (!isLineInAppBrowser()) return;
 
@@ -49,25 +55,10 @@ async function initLiffLoginIfNeeded() {
     return;
   }
 
-  const query = new URLSearchParams(window.location.search);
-  const hasLiffContext =
-    query.has('liff.state') ||
-    query.has('liffClientId') ||
-    query.has('access_token');
-  const redirectedKey = 'liff_redirected_once';
-  const redirectedOnce = sessionStorage.getItem(redirectedKey) === '1';
-
-  // 若是從一般網址進 LINE 內建瀏覽器，先導到 LIFF URL，避免走到易失敗的一般 OAuth 流程。
-  if (!hasLiffContext && !redirectedOnce) {
-    sessionStorage.setItem(redirectedKey, '1');
-    window.location.replace(`https://liff.line.me/${liffId}`);
-    return;
-  }
-
   try {
     await liff.init({ liffId });
     if (!liff.isLoggedIn()) {
-      liff.login({ redirectUri: window.location.href });
+      authError.value = '請點「使用 LINE 開啟」完成登入。';
       return;
     }
     const profile = await liff.getProfile();
@@ -75,7 +66,6 @@ async function initLiffLoginIfNeeded() {
       userId: profile.userId,
       displayName: profile.displayName
     };
-    sessionStorage.removeItem(redirectedKey);
   } catch (error) {
     console.error(error);
     authError.value = 'LINE 內建瀏覽器登入失敗，請改用外部瀏覽器開啟。';
@@ -129,6 +119,10 @@ async function loginWithLine() {
   if (inLineBrowser || isMobile) {
     if (inLineBrowser && !import.meta.env.VITE_LIFF_ID) {
       authError.value = 'LINE 內建瀏覽器建議使用 LIFF，請先設定 VITE_LIFF_ID。';
+      return;
+    }
+    if (inLineBrowser && import.meta.env.VITE_LIFF_ID) {
+      openWithLiffUrl();
       return;
     }
     try {
@@ -283,6 +277,9 @@ async function skipLinkForNow() {
       </template>
     </NavBar>
     <p v-if="authError" class="auth-error">{{ authError }}</p>
+    <div v-if="isLineInAppBrowser() && !liffProfile && !currentUser" class="liff-help">
+      <button class="auth-button" @click="openWithLiffUrl">使用 LINE 開啟</button>
+    </div>
     <div v-if="showLinkModal" class="link-modal-mask">
       <div class="link-modal">
         <h3>綁定舊資料</h3>
@@ -342,6 +339,13 @@ async function skipLinkForNow() {
   width: min(920px, calc(100% - 32px));
   color: #d93025;
   font-size: 14px;
+}
+
+.liff-help {
+  margin: 0 auto 12px;
+  width: min(920px, calc(100% - 32px));
+  display: flex;
+  justify-content: center;
 }
 
 .link-modal-mask {
