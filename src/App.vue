@@ -49,6 +49,18 @@ async function initLiffLoginIfNeeded() {
     return;
   }
 
+  const query = new URLSearchParams(window.location.search);
+  const hasLiffContext =
+    query.has('liff.state') ||
+    query.has('liffClientId') ||
+    query.has('access_token');
+
+  // 若是從一般網址進 LINE 內建瀏覽器，先導到 LIFF URL，避免走到易失敗的一般 OAuth 流程。
+  if (!hasLiffContext) {
+    window.location.replace(`https://liff.line.me/${liffId}`);
+    return;
+  }
+
   try {
     await liff.init({ liffId });
     if (!liff.isLoggedIn()) {
