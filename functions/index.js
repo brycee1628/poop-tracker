@@ -5,6 +5,91 @@ admin.initializeApp();
 
 const db = admin.database();
 
+function getLineChannelAccessToken() {
+  if (process.env.LINE_CHANNEL_ACCESS_TOKEN) return process.env.LINE_CHANNEL_ACCESS_TOKEN;
+  try {
+    return functions.config().line.channel_access_token;
+  } catch (error) {
+    return null;
+  }
+}
+
+async function replyLineText(replyToken, text) {
+  const accessToken = getLineChannelAccessToken();
+  if (!accessToken) {
+    console.warn("⚠️ 缺少 LINE channel access token，無法回覆訊息");
+    return false;
+  }
+  if (!replyToken) {
+    console.warn("⚠️ 缺少 replyToken，無法回覆訊息");
+    return false;
+  }
+
+  try {
+    const response = await fetch("https://api.line.me/v2/bot/message/reply", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        replyToken,
+        messages: [{ type: "text", text }],
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      console.error(`❌ LINE 回覆 API 失敗: HTTP ${response.status} ${body}`);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.error("❌ LINE 回覆失敗:", error);
+    return false;
+  }
+}
+
+async function pushLineText(toUserId, text) {
+  const accessToken = getLineChannelAccessToken();
+  if (!accessToken || !toUserId) return false;
+
+  try {
+    const response = await fetch("https://api.line.me/v2/bot/message/push", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        to: toUserId,
+        messages: [{ type: "text", text }],
+      }),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      console.error(`❌ LINE Push API 失敗: HTTP ${response.status} ${body}`);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.error("❌ LINE Push 失敗:", error);
+    return false;
+  }
+}
+
+async function notifyLineUser(event, text) {
+  const replied = await replyLineText(event?.replyToken, text);
+  if (replied) return;
+
+  const lineUserId = event?.source?.userId;
+  if (lineUserId) {
+    await pushLineText(lineUserId, text);
+  } else {
+    console.warn("⚠️ 無法 fallback push：缺少 line user id");
+  }
+}
+
 function buildNowInTaipei() {
   const now = new Date();
   const taipeiTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" }));
@@ -23,7 +108,7 @@ async function incrementCounterAtPath(path) {
   const targetRef = db.ref(path);
   const { dateString, timeString } = buildNowInTaipei();
 
-  await targetRef.transaction((current) => {
+  const txResult = await targetRef.transaction((current) => {
     if (!current) {
       return {
         count: 1,
@@ -69,6 +154,16 @@ async function incrementCounterAtPath(path) {
       dailyRecords: newDailyRecords,
     };
   });
+
+  const finalData = txResult.snapshot.val() || {};
+  const todayRecord = finalData.dailyRecords?.[dateString];
+  const todayCount = typeof todayRecord === "number"
+    ? todayRecord
+    : (todayRecord?.count || 0);
+  return {
+    totalCount: finalData.count || 0,
+    todayCount,
+  };
 }
 
 // ✅ LINE Webhook（GCF Gen 1）
@@ -146,6 +241,7 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
           const lineUserId = event?.source?.userId;
           if (!lineUserId) {
             console.log("⚠️ +1 缺少 line user id，已略過");
+            await notifyLineUser(event, "找不到使用者資訊，無法 +1。");
             continue;
           }
           const lineBindingSnapshot = await db.ref(`lineUsers/${lineUserId}`).once("value");
@@ -153,16 +249,25 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
           targetName = lineBinding?.name || null;
           if (!targetName) {
             console.log(`⚠️ +1 找不到綁定名稱: ${lineUserId}`);
+            await notifyLineUser(event, "你還沒完成綁定，請先到網站登入並完成綁定。");
             continue;
           }
         }
 
         const uidSnapshot = await db.ref(`nameToUid/${targetName}`).once("value");
         const uid = uidSnapshot.val();
+        let countResult = null;
         if (uid) {
-          await incrementCounterAtPath(`poopCounterByUser/${uid}`);
+          countResult = await incrementCounterAtPath(`poopCounterByUser/${uid}`);
         } else {
-          await incrementCounterAtPath(`poopCounter/${targetName}`);
+          countResult = await incrementCounterAtPath(`poopCounter/${targetName}`);
+        }
+
+        if (countResult) {
+          await notifyLineUser(
+            event,
+            `✅ ${targetName} +1 成功\n今日第 ${countResult.todayCount} 次，本月累計 ${countResult.totalCount} 次`
+          );
         }
       }
     }
