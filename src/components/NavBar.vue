@@ -21,6 +21,9 @@ const clickBall = () => {
                 {{ item.pageName }}
             </router-link>
         </div>
+        <div class="navbar-actions">
+            <slot name="right"></slot>
+        </div>
         <div class="ball" @click="clickBall" :class="clickBallConfirm ? 'ball-active' : ''">
             <div class="ball-top"></div>
             <div class="ball-item"></div>
@@ -55,6 +58,16 @@ const clickBall = () => {
             }
         }
     }
+}
+
+.navbar-actions {
+    position: absolute;
+    right: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .navbar-active {
@@ -116,5 +129,11 @@ const clickBall = () => {
 .ball-active {
     top: 30px;
     transform: rotate(360deg);
+}
+
+@media (max-width: 720px) {
+    .navbar-actions {
+        right: 8px;
+    }
 }
 </style>

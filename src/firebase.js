@@ -1,6 +1,15 @@
 // Import the functions you need from the SDKs you need
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, onValue, set, get } from "firebase/database";
+import {
+    getAuth,
+    OAuthProvider,
+    signInWithPopup,
+    signInWithRedirect,
+    getRedirectResult,
+    signOut,
+    onAuthStateChanged
+} from "firebase/auth";
 // TODO: Add SDKs for Firebase products that you want to use
 // https://firebase.google.com/docs/web/setup#available-libraries
 
@@ -18,5 +27,25 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const database = getDatabase(app);
+const auth = getAuth(app);
+const lineProviderId = import.meta.env.VITE_LINE_PROVIDER_ID || "oidc.line";
+const lineProvider = new OAuthProvider(lineProviderId);
 
-export { database, ref, onValue, set, get };
+const signInWithLinePopup = () => signInWithPopup(auth, lineProvider);
+const signInWithLineRedirect = () => signInWithRedirect(auth, lineProvider);
+const getLineRedirectResult = () => getRedirectResult(auth);
+const signOutAuth = () => signOut(auth);
+
+export {
+    database,
+    ref,
+    onValue,
+    set,
+    get,
+    auth,
+    onAuthStateChanged,
+    signInWithLinePopup,
+    signInWithLineRedirect,
+    getLineRedirectResult,
+    signOutAuth
+};
