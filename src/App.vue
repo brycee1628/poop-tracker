@@ -14,7 +14,8 @@ import {
   ref as dbRef,
   get,
   set,
-  remove
+  remove,
+  update
 } from './firebase';
 
 const currentUser = ref(null);
@@ -104,29 +105,31 @@ async function initLiffLoginIfNeeded() {
     };
     authError.value = '';
 
-    // LIFF 登入成功後，若尚未綁定名稱則顯示綁定面板
-    const lineBindingSnapshot = await get(dbRef(database, `lineUsers/${profile.userId}`));
-    const lineBinding = lineBindingSnapshot.val();
-    if (!lineBinding?.name) {
-      needsBinding.value = true;
-      const legacySnapshot = await get(dbRef(database, 'poopCounter'));
-      const legacyData = legacySnapshot.val() || {};
-      unlinkedLegacyNames.value = Object.keys(legacyData);
-      if (unlinkedLegacyNames.value.length > 0) {
-        selectedLegacyName.value = unlinkedLegacyNames.value[0];
-      }
-    } else {
-      needsBinding.value = false;
-    }
+    await refreshLegacyBindingUi();
   } catch (error) {
     console.error(error);
     authError.value = 'LINE 內建瀏覽器登入失敗，請改用外部瀏覽器開啟。';
   }
 }
 
+/** LINE OIDC 的 sub；相容不同 Identity Platform provider id 寫法 */
 function getLineProviderUid(user) {
-  const provider = user?.providerData?.find((item) => item.providerId?.startsWith('oidc.'));
-  return provider?.uid || null;
+  const providers = user?.providerData || [];
+  let p = providers.find((item) => item.providerId?.startsWith('oidc.'));
+  if (!p) {
+    p = providers.find((item) => item.providerId?.toLowerCase().includes('line'));
+  }
+  return p?.uid || null;
+}
+
+/** 僅同步 Firebase uid 給 LINE +1，不把顯示名寫成排行榜綁定名 */
+async function syncLineUserFirebaseOnly(user) {
+  const lineUid = getLineProviderUid(user);
+  if (!lineUid) return;
+  await set(dbRef(database, `lineUsers/${lineUid}`), {
+    firebaseUid: user.uid,
+    updatedAt: Date.now()
+  });
 }
 
 async function syncLineUserBinding(user, boundName) {
@@ -135,8 +138,75 @@ async function syncLineUserBinding(user, boundName) {
   await set(dbRef(database, `lineUsers/${lineUid}`), {
     name: boundName,
     firebaseUid: user.uid,
+    linkedLegacy: true,
     updatedAt: Date.now()
   });
+}
+
+/** 是否已完成「繼承舊排行榜」：不可僅依 lineUsers.name（可能是 LINE 暱稱或稍後再綁） */
+async function isFirebaseLegacyBound(user, userProfile, lineBinding) {
+  if (userProfile?.legacyName) return true;
+  if (lineBinding?.linkedLegacy === true && lineBinding?.name) return true;
+  const n = lineBinding?.name;
+  if (n && user?.uid) {
+    const mapSnap = await get(dbRef(database, `nameToUid/${n}`));
+    return mapSnap.val() === user.uid;
+  }
+  return false;
+}
+
+/** LIFF：同上，並相容舊資料（有 name 且已出現在 nameToUid） */
+async function isLiffLegacyBound(lineBinding) {
+  if (!lineBinding) return false;
+  if (lineBinding.linkedLegacy === true && lineBinding.name) return true;
+  const n = lineBinding.name;
+  if (!n) return false;
+  const mapSnap = await get(dbRef(database, `nameToUid/${n}`));
+  return mapSnap.val() != null && mapSnap.val() !== '';
+}
+
+/**
+ * 是否已完成繼承（單一真相來源，避免 LIFF / Firebase 各算各的或互相覆寫）。
+ * 同時存在 Firebase 與 LIFF 時，以 Firebase 規則為準（較嚴格、與 users/nameToUid 一致）。
+ */
+async function computeLegacyBoundState() {
+  if (currentUser.value) {
+    const userProfileSnapshot = await get(dbRef(database, `users/${currentUser.value.uid}`));
+    const userProfile = userProfileSnapshot.val() || {};
+    const lineUid = getLineProviderUid(currentUser.value);
+    let lineBinding = null;
+    if (lineUid) {
+      const lineBindingSnapshot = await get(dbRef(database, `lineUsers/${lineUid}`));
+      lineBinding = lineBindingSnapshot.val();
+    }
+    return isFirebaseLegacyBound(currentUser.value, userProfile, lineBinding);
+  }
+  if (liffProfile.value?.userId) {
+    const lineBindingSnapshot = await get(dbRef(database, `lineUsers/${liffProfile.value.userId}`));
+    const lineBinding = lineBindingSnapshot.val();
+    return isLiffLegacyBound(lineBinding);
+  }
+  return true;
+}
+
+/** 依 poopCounter 剩餘名稱 + 繼承狀態，更新綁定按鈕與下拉選單資料 */
+async function refreshLegacyBindingUi() {
+  if (!currentUser.value && !liffProfile.value) {
+    needsBinding.value = false;
+    return;
+  }
+  const legacySnapshot = await get(dbRef(database, 'poopCounter'));
+  const legacyData = legacySnapshot.val() || {};
+  unlinkedLegacyNames.value = Object.keys(legacyData);
+  const bound = await computeLegacyBoundState();
+  if (unlinkedLegacyNames.value.length > 0) {
+    needsBinding.value = !bound;
+    if (!selectedLegacyName.value || !unlinkedLegacyNames.value.includes(selectedLegacyName.value)) {
+      selectedLegacyName.value = unlinkedLegacyNames.value[0];
+    }
+  } else {
+    needsBinding.value = false;
+  }
 }
 
 onMounted(async () => {
@@ -177,11 +247,26 @@ onMounted(async () => {
       showLinkModal.value = false;
       unlinkedLegacyNames.value = [];
       selectedLegacyName.value = '';
+      try {
+        await refreshLegacyBindingUi();
+      } catch (error) {
+        console.error(error);
+        needsBinding.value = false;
+      }
     }
   });
 
   // 某些瀏覽器在 OAuth 回跳後不會即時刷新 UI，回焦點時主動同步一次
   window.addEventListener('focus', syncAuthUserNow);
+
+  // LIFF 先跑、Firebase 後就緒時，再對齊一次「綁定ID」狀態
+  if (currentUser.value || liffProfile.value) {
+    try {
+      await refreshLegacyBindingUi();
+    } catch (error) {
+      console.error(error);
+    }
+  }
 });
 
 async function loginWithLine() {
@@ -257,35 +342,32 @@ async function ensureUserLinkState(user) {
     lineBinding = lineBindingSnapshot.val();
   }
 
-  // users 或 lineUsers 任一已有綁定，都視為已綁定
-  if (userProfile.legacyName || lineBinding?.name) {
+  const legacyBound = await isFirebaseLegacyBound(user, userProfile, lineBinding);
+  if (legacyBound) {
     const boundName = userProfile.legacyName || lineBinding?.name;
     if (boundName) {
       await syncLineUserBinding(user, boundName);
     }
-    needsBinding.value = false;
     showLinkModal.value = false;
+    await refreshLegacyBindingUi();
     return;
   }
 
   const legacySnapshot = await get(dbRef(database, 'poopCounter'));
   const legacyData = legacySnapshot.val() || {};
-  unlinkedLegacyNames.value = Object.keys(legacyData);
+  const keys = Object.keys(legacyData);
 
-  if (unlinkedLegacyNames.value.length > 0) {
-    needsBinding.value = true;
-    selectedLegacyName.value = unlinkedLegacyNames.value[0];
-    showLinkModal.value = false;
-  } else {
+  if (keys.length === 0) {
     await set(userProfileRef, {
       displayName: user.displayName || null,
       legacyName: null,
       updatedAt: Date.now()
     });
-    await syncLineUserBinding(user, user.displayName || null);
-    needsBinding.value = false;
-    showLinkModal.value = false;
+    await syncLineUserFirebaseOnly(user);
   }
+
+  showLinkModal.value = false;
+  await refreshLegacyBindingUi();
 }
 
 async function linkSelectedLegacyData() {
@@ -336,12 +418,13 @@ async function linkSelectedLegacyData() {
       await set(dbRef(database, `lineUsers/${liffProfile.value.userId}`), {
         name: legacyName,
         firebaseUid: mappedUid,
+        linkedLegacy: true,
         updatedAt: Date.now()
       });
     }
 
-    needsBinding.value = false;
     showLinkModal.value = false;
+    await refreshLegacyBindingUi();
   } catch (error) {
     linkError.value = error.message || '綁定失敗，請稍後再試。';
   } finally {
@@ -356,15 +439,16 @@ async function skipLinkForNow() {
       legacyName: null,
       updatedAt: Date.now()
     });
-    await syncLineUserBinding(currentUser.value, currentUser.value.displayName || null);
+    await syncLineUserFirebaseOnly(currentUser.value);
   } else if (liffProfile.value?.userId) {
-    await set(dbRef(database, `lineUsers/${liffProfile.value.userId}`), {
-      name: liffProfile.value.displayName || null,
+    await update(dbRef(database, `lineUsers/${liffProfile.value.userId}`), {
+      name: null,
+      linkedLegacy: null,
       updatedAt: Date.now()
     });
   }
-  needsBinding.value = false;
   showLinkModal.value = false;
+  await refreshLegacyBindingUi();
 }
 
 async function openBindingSelector() {

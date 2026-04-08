@@ -67,6 +67,8 @@ import { useRouter } from 'vue-router';
 const legacyPoopData = reactive({});
 const uidPoopData = reactive({});
 const userProfiles = reactive({});
+/** nameToUid/{排行榜名} -> firebase uid，用於 uid 列反查應顯示的舊榜名（避免顯示 LINE 暱稱） */
+const nameToUidMap = reactive({});
 const poopData = reactive({});
 const historicalTotal = vueRef(0);
 const router = useRouter();
@@ -114,6 +116,13 @@ function mergeDailyRecords(baseRecords = {}, incomingRecords = {}) {
 
 function rebuildCombinedPoopData() {
     const mergedData = {};
+    /** @type {Record<string, string>} */
+    const uidToMappedLegacyName = {};
+    Object.entries(nameToUidMap).forEach(([legacyName, id]) => {
+        if (id && uidToMappedLegacyName[id] === undefined) {
+            uidToMappedLegacyName[id] = legacyName;
+        }
+    });
 
     // 先放入舊資料（name 為 key）
     Object.entries(legacyPoopData).forEach(([name, data]) => {
@@ -123,7 +132,11 @@ function rebuildCombinedPoopData() {
     // 再合併新資料（uid 為 key，轉成顯示名稱）
     Object.entries(uidPoopData).forEach(([uid, data]) => {
         const profile = userProfiles[uid] || {};
-        const displayName = profile.legacyName || profile.displayName || `使用者-${uid.slice(-6)}`;
+        const displayName =
+            profile.legacyName ||
+            uidToMappedLegacyName[uid] ||
+            profile.displayName ||
+            `使用者-${uid.slice(-6)}`;
         const normalized = normalizeUserData(data);
 
         if (!mergedData[displayName]) {
@@ -240,6 +253,12 @@ onMounted(() => {
     onValue(ref(database, 'users'), (snapshot) => {
         const data = snapshot.val() || {};
         syncReactiveObject(userProfiles, data);
+        rebuildCombinedPoopData();
+    });
+
+    onValue(ref(database, 'nameToUid'), (snapshot) => {
+        const data = snapshot.val() || {};
+        syncReactiveObject(nameToUidMap, data);
         rebuildCombinedPoopData();
     });
 
