@@ -234,8 +234,14 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
         if (!firebaseUid) {
           await notifyLineUser(
             event,
-            "請先用手機／電腦瀏覽器開啟網站，用 LINE 登入一次（不用在網頁上按綁定），完成後再傳：\n繼承 " +
-              legacyName
+            [
+              "尚未把這個 LINE 帳號與網站登入對應起來（缺 firebaseUid）。",
+              "",
+              "請用「外部瀏覽器」開啟網站並完成 LINE 登入，看到右上角已登入後等幾秒，再傳：",
+              `繼承 ${legacyName}`,
+              "",
+              "若你已登入仍出現此訊息：請確認網站已更新到最新版；不要用僅 LIFF、未走 Firebase 登入的狀態。",
+            ].join("\n")
           );
           continue;
         }

@@ -87,6 +87,14 @@ function isLineInAppBrowser() {
   return /Line\//i.test(navigator.userAgent || '');
 }
 
+/** 內建瀏覽器常導致 Firebase redirect 的 sessionStorage 無法延續（missing initial state） */
+function isLikelyInAppOrEmbeddedBrowser() {
+  const ua = navigator.userAgent || '';
+  if (/Line\//i.test(ua)) return true;
+  if (/FBAN|FBAV|FBIOS|Instagram|Line\/|MicroMessenger/i.test(ua)) return true;
+  return false;
+}
+
 function openWithLiffUrl() {
   const liffId = import.meta.env.VITE_LIFF_ID;
   if (!liffId) return;
@@ -140,11 +148,11 @@ function getLineProviderUid(user) {
   return p?.uid || null;
 }
 
-/** 僅同步 Firebase uid 給 LINE +1，不把顯示名寫成排行榜綁定名 */
+/** 把 Firebase uid 合併進 lineUsers（LINE 繼承／+1 依賴）。用 update 避免蓋掉已繼承的 name、linkedLegacy。 */
 async function syncLineUserFirebaseOnly(user) {
   const lineUid = getLineProviderUid(user);
   if (!lineUid) return;
-  await set(dbRef(database, `lineUsers/${lineUid}`), {
+  await update(dbRef(database, `lineUsers/${lineUid}`), {
     firebaseUid: user.uid,
     updatedAt: Date.now()
   });
@@ -325,7 +333,17 @@ async function loginWithLine() {
       return;
     }
   } catch (error) {
-    if (error?.code === 'auth/popup-blocked' || error?.code === 'auth/operation-not-supported-in-this-environment') {
+    if (error?.code === 'auth/operation-not-supported-in-this-environment') {
+      authError.value =
+        '此瀏覽器不支援登入彈窗。請勿在 LINE／IG／微信等 App 內建瀏覽器登入：點右上角「⋯」或「⋮」→ 用 Safari／Chrome「在瀏覽器中開啟」本站，再按登入。';
+      return;
+    }
+    if (error?.code === 'auth/popup-blocked') {
+      if (isLikelyInAppOrEmbeddedBrowser()) {
+        authError.value =
+          '彈窗被擋下，且內建瀏覽器無法安全使用轉址登入。請用 Safari／Chrome 開啟本站網址後再登入（LINE 內請選「在瀏覽器中開啟」）。';
+        return;
+      }
       await signInWithLineRedirect();
       return;
     }
@@ -357,6 +375,10 @@ async function ensureUserLinkState(user) {
   const userProfileSnapshot = await get(userProfileRef);
   const userProfile = userProfileSnapshot.val() || {};
   const lineUid = getLineProviderUid(user);
+  // 先前僅在 poopCounter 為空時才 sync，導致「還有待認領舊名」的使用者登入後 lineUsers 仍無 firebaseUid，LINE 指令「繼承」永遠失敗
+  if (lineUid) {
+    await syncLineUserFirebaseOnly(user);
+  }
   let lineBinding = null;
   if (lineUid) {
     const lineBindingSnapshot = await get(dbRef(database, `lineUsers/${lineUid}`));
@@ -384,7 +406,6 @@ async function ensureUserLinkState(user) {
       legacyName: null,
       updatedAt: Date.now()
     });
-    await syncLineUserFirebaseOnly(user);
   }
 
   showLinkModal.value = false;
