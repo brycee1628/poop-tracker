@@ -1,11 +1,11 @@
 <script setup>
-
+const year = new Date().getFullYear()
 </script>
 
 <template>
     <div class="footer">
 
-        <div class="copyright">© 2025 魔界 makai All rights reserved.</div>
+        <div class="copyright">© {{ year }} 魔界 makai All rights reserved.</div>
     </div>
 </template>
 
