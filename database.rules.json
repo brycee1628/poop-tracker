@@ -4,6 +4,30 @@
             ".read": true,
             ".write": true
         },
+        "poopCounterByUser": {
+            ".read": true,
+            "$uid": {
+                ".write": "auth != null && auth.uid === $uid"
+            }
+        },
+        "users": {
+            ".read": true,
+            "$uid": {
+                ".write": "auth != null && auth.uid === $uid"
+            }
+        },
+        "nameToUid": {
+            ".read": true,
+            "$name": {
+                ".write": "auth != null"
+            }
+        },
+        "lineUsers": {
+            ".read": false,
+            "$lineUid": {
+                ".write": "auth != null"
+            }
+        },
         "monthlyHistory": {
             ".read": true,
             ".write": false

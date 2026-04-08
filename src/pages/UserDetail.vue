@@ -209,8 +209,19 @@ function generateEmptyDailyRecords(monthString) {
 
 async function fetchMonthData() {
     if (selectedMonth.value === 'current') {
+        // 先查是否已完成 uid 綁定；有綁定則讀新資料路徑
+        let currentRef = dbRef(database, `poopCounter/${userName}`);
+        try {
+            const uidSnapshot = await get(dbRef(database, `nameToUid/${userName}`));
+            const uid = uidSnapshot.val();
+            if (uid) {
+                currentRef = dbRef(database, `poopCounterByUser/${uid}`);
+            }
+        } catch (error) {
+            currentRef = dbRef(database, `poopCounter/${userName}`);
+        }
+
         // 獲取當前月份數據
-        const currentRef = dbRef(database, `poopCounter/${userName}`);
         onValue(currentRef, (snapshot) => {
             const data = snapshot.val();
 

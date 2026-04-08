@@ -1,9 +1,75 @@
-const functions = require("firebase-functions");
+const functions = require("firebase-functions/v1");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
 admin.initializeApp();
 
 const db = admin.database();
+
+function buildNowInTaipei() {
+  const now = new Date();
+  const taipeiTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" }));
+  const year = taipeiTime.getFullYear();
+  const month = String(taipeiTime.getMonth() + 1).padStart(2, "0");
+  const day = String(taipeiTime.getDate()).padStart(2, "0");
+  const hour = String(taipeiTime.getHours()).padStart(2, "0");
+  const minute = String(taipeiTime.getMinutes()).padStart(2, "0");
+  return {
+    dateString: `${year}-${month}-${day}`,
+    timeString: `${hour}:${minute}`,
+  };
+}
+
+async function incrementCounterAtPath(path) {
+  const targetRef = db.ref(path);
+  const { dateString, timeString } = buildNowInTaipei();
+
+  await targetRef.transaction((current) => {
+    if (!current) {
+      return {
+        count: 1,
+        dailyRecords: {
+          [dateString]: {
+            count: 1,
+            times: [timeString],
+          },
+        },
+      };
+    }
+
+    if (typeof current === "number") {
+      return {
+        count: current + 1,
+        dailyRecords: {
+          [dateString]: {
+            count: 1,
+            times: [timeString],
+          },
+        },
+      };
+    }
+
+    const newDailyRecords = { ...(current.dailyRecords || {}) };
+    if (!newDailyRecords[dateString]) {
+      newDailyRecords[dateString] = { count: 1, times: [timeString] };
+    } else if (typeof newDailyRecords[dateString] === "number") {
+      newDailyRecords[dateString] = {
+        count: newDailyRecords[dateString] + 1,
+        times: [timeString],
+      };
+    } else {
+      newDailyRecords[dateString] = {
+        count: (newDailyRecords[dateString].count || 0) + 1,
+        times: [...(newDailyRecords[dateString].times || []), timeString],
+      };
+    }
+
+    return {
+      ...current,
+      count: (current.count || 0) + 1,
+      dailyRecords: newDailyRecords,
+    };
+  });
+}
 
 // ✅ LINE Webhook（GCF Gen 1）
 exports.lineWebhook = functions.https.onRequest(async (req, res) => {
@@ -70,80 +136,34 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
         continue;
       }
 
-      // 處理 +1 計數
-      const countMatch = msg.match(/^(.+?)\s*\+1$/);
-      if (countMatch) {
-        const name = countMatch[1];
-        const ref = db.ref(`poopCounter/${name}`);
+      // 處理 +1 計數（支援「名字 +1」和純「+1」）
+      const namedCountMatch = msg.match(/^(.+?)\s*\+1$/);
+      const plainPlusOne = msg === "+1";
+      if (namedCountMatch || plainPlusOne) {
+        let targetName = namedCountMatch ? namedCountMatch[1].trim() : null;
 
-        // 獲取當前日期和時間，使用台北時區
-        const now = new Date();
-        // 使用台北時區 (UTC+8)
-        const taipeiTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" }));
-        const year = taipeiTime.getFullYear();
-        const month = String(taipeiTime.getMonth() + 1).padStart(2, '0');
-        const day = String(taipeiTime.getDate()).padStart(2, '0');
-        const hour = String(taipeiTime.getHours()).padStart(2, '0');
-        const minute = String(taipeiTime.getMinutes()).padStart(2, '0');
-        const dateString = `${year}-${month}-${day}`;
-        const timeString = `${hour}:${minute}`;
-
-        await ref.transaction((current) => {
-          if (!current) {
-            return {
-              count: 1,
-              dailyRecords: {
-                [dateString]: {
-                  count: 1,
-                  times: [timeString]
-                }
-              }
-            };
+        if (plainPlusOne) {
+          const lineUserId = event?.source?.userId;
+          if (!lineUserId) {
+            console.log("⚠️ +1 缺少 line user id，已略過");
+            continue;
           }
-
-          // 處理舊數據格式
-          if (typeof current === 'number') {
-            return {
-              count: current + 1,
-              dailyRecords: {
-                [dateString]: {
-                  count: 1,
-                  times: [timeString]
-                }
-              }
-            };
+          const lineBindingSnapshot = await db.ref(`lineUsers/${lineUserId}`).once("value");
+          const lineBinding = lineBindingSnapshot.val();
+          targetName = lineBinding?.name || null;
+          if (!targetName) {
+            console.log(`⚠️ +1 找不到綁定名稱: ${lineUserId}`);
+            continue;
           }
+        }
 
-          // 新數據格式
-          const newDailyRecords = { ...(current.dailyRecords || {}) };
-
-          // 檢查當日記錄是否存在
-          if (!newDailyRecords[dateString]) {
-            // 如果當天沒有記錄，創建新的
-            newDailyRecords[dateString] = {
-              count: 1,
-              times: [timeString]
-            };
-          } else if (typeof newDailyRecords[dateString] === 'number') {
-            // 如果是舊格式（純數字），轉換為新格式
-            newDailyRecords[dateString] = {
-              count: newDailyRecords[dateString] + 1,
-              times: [timeString]
-            };
-          } else {
-            // 如果是新格式，更新計數和時間
-            newDailyRecords[dateString] = {
-              count: (newDailyRecords[dateString].count || 0) + 1,
-              times: [...(newDailyRecords[dateString].times || []), timeString]
-            };
-          }
-
-          return {
-            ...current,
-            count: (current.count || 0) + 1,
-            dailyRecords: newDailyRecords
-          };
-        });
+        const uidSnapshot = await db.ref(`nameToUid/${targetName}`).once("value");
+        const uid = uidSnapshot.val();
+        if (uid) {
+          await incrementCounterAtPath(`poopCounterByUser/${uid}`);
+        } else {
+          await incrementCounterAtPath(`poopCounter/${targetName}`);
+        }
       }
     }
   }

@@ -64,12 +64,83 @@ import { reactive, onMounted, computed, ref as vueRef } from 'vue';
 import { database, ref, onValue, get } from '../firebase';
 import { useRouter } from 'vue-router';
 
+const legacyPoopData = reactive({});
+const uidPoopData = reactive({});
+const userProfiles = reactive({});
 const poopData = reactive({});
 const historicalTotal = vueRef(0);
 const router = useRouter();
 const searchQuery = vueRef('');
 const showHealthModal = vueRef(false);
 const healthDetailsUser = vueRef('');
+
+function syncReactiveObject(target, source) {
+    Object.keys(target).forEach((key) => {
+        if (!(key in source)) {
+            delete target[key];
+        }
+    });
+
+    Object.entries(source).forEach(([key, value]) => {
+        target[key] = value;
+    });
+}
+
+function normalizeUserData(data) {
+    if (!data) return { count: 0, declaration: null, dailyRecords: {} };
+    if (typeof data === 'number') {
+        return { count: data, declaration: null, dailyRecords: {} };
+    }
+    return {
+        count: data.count || 0,
+        declaration: data.declaration || null,
+        dailyRecords: data.dailyRecords || {}
+    };
+}
+
+function mergeDailyRecords(baseRecords = {}, incomingRecords = {}) {
+    const merged = { ...baseRecords };
+    Object.entries(incomingRecords).forEach(([date, record]) => {
+        const base = merged[date];
+        const baseObj = typeof base === 'number' ? { count: base, times: [] } : (base || {});
+        const incomingObj = typeof record === 'number' ? { count: record, times: [] } : (record || {});
+        merged[date] = {
+            count: (baseObj.count || 0) + (incomingObj.count || 0),
+            times: [...(baseObj.times || []), ...(incomingObj.times || [])]
+        };
+    });
+    return merged;
+}
+
+function rebuildCombinedPoopData() {
+    const mergedData = {};
+
+    // 先放入舊資料（name 為 key）
+    Object.entries(legacyPoopData).forEach(([name, data]) => {
+        mergedData[name] = normalizeUserData(data);
+    });
+
+    // 再合併新資料（uid 為 key，轉成顯示名稱）
+    Object.entries(uidPoopData).forEach(([uid, data]) => {
+        const profile = userProfiles[uid] || {};
+        const displayName = profile.legacyName || profile.displayName || `使用者-${uid.slice(-6)}`;
+        const normalized = normalizeUserData(data);
+
+        if (!mergedData[displayName]) {
+            mergedData[displayName] = normalized;
+            return;
+        }
+
+        const current = normalizeUserData(mergedData[displayName]);
+        mergedData[displayName] = {
+            count: (current.count || 0) + (normalized.count || 0),
+            declaration: current.declaration || normalized.declaration || null,
+            dailyRecords: mergeDailyRecords(current.dailyRecords, normalized.dailyRecords)
+        };
+    });
+
+    syncReactiveObject(poopData, mergedData);
+}
 
 const sortedPoopList = computed(() => {
     return Object.entries(poopData)
@@ -151,19 +222,25 @@ const fetchHistoricalTotal = async () => {
 const poopRef = ref(database, 'poopCounter');
 
 onMounted(() => {
-    // 獲取當前月份數據
+    // 舊資料來源：poopCounter（name key）
     onValue(poopRef, (snapshot) => {
         const data = snapshot.val() || {};
-        // 優化數據處理方式，避免不必要的刪除和重新創建
-        Object.keys(poopData).forEach(key => {
-            if (!(key in data)) {
-                delete poopData[key];
-            }
-        });
+        syncReactiveObject(legacyPoopData, data);
+        rebuildCombinedPoopData();
+    });
 
-        Object.entries(data).forEach(([key, value]) => {
-            poopData[key] = value;
-        });
+    // 新資料來源：poopCounterByUser（uid key）
+    onValue(ref(database, 'poopCounterByUser'), (snapshot) => {
+        const data = snapshot.val() || {};
+        syncReactiveObject(uidPoopData, data);
+        rebuildCombinedPoopData();
+    });
+
+    // 使用者檔：users/{uid}，用於 uid -> 顯示名稱
+    onValue(ref(database, 'users'), (snapshot) => {
+        const data = snapshot.val() || {};
+        syncReactiveObject(userProfiles, data);
+        rebuildCombinedPoopData();
     });
 
     // 獲取歷史數據總和
