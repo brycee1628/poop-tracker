@@ -211,8 +211,9 @@ async function computeLegacyBoundState() {
     return isFirebaseLegacyBound(currentUser.value, userProfile);
   }
   if (liffProfile.value?.userId) {
-    // lineUsers 對前端是不可讀，LIFF-only 無法在前端準確判斷，預設顯示可綁定入口
-    return false;
+    // lineUsers 對前端不可讀；LIFF-only 無法可靠判斷綁定狀態。
+    // 為避免「已綁定（可 +1）卻一直顯示綁定按鈕」的誤導，LIFF-only 預設視為已處理。
+    return true;
   }
   return true;
 }
