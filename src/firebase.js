@@ -6,6 +6,7 @@ import {
     initializeAuth,
     browserLocalPersistence,
     indexedDBLocalPersistence,
+    browserPopupRedirectResolver,
     OAuthProvider,
     signInWithPopup,
     signInWithRedirect,
@@ -36,7 +37,8 @@ const database = getDatabase(app);
 function createAuth(appInstance) {
     try {
         return initializeAuth(appInstance, {
-            persistence: [indexedDBLocalPersistence, browserLocalPersistence]
+            persistence: [indexedDBLocalPersistence, browserLocalPersistence],
+            popupRedirectResolver: browserPopupRedirectResolver
         });
     } catch {
         return getAuth(appInstance);

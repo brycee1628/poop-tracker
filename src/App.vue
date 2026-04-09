@@ -182,29 +182,22 @@ async function syncLineUserBinding(user, boundName) {
   });
 }
 
-/**
- * Firebase 登入：僅當 users 有 legacyName，或 lineUsers 的排行榜名在 nameToUid 指向「本人 uid」。
- * 不可單靠 linkedLegacy（LIFF 綁定曾寫入但未必同步 nameToUid），也不可只判断 nameToUid「有值」（暱稱撞名會誤判）。
- */
-async function isFirebaseLegacyBound(user, userProfile, lineBinding) {
-  if (userProfile?.legacyName) return true;
-  const n = lineBinding?.name;
-  if (!n || !user?.uid) return false;
-  const mapSnap = await get(dbRef(database, `nameToUid/${n}`));
-  return mapSnap.val() === user.uid;
+async function getMappedLegacyNameByUid(uid) {
+  if (!uid) return null;
+  const mapSnapshot = await get(dbRef(database, 'nameToUid'));
+  const mapData = mapSnapshot.val() || {};
+  for (const [legacyName, mappedUid] of Object.entries(mapData)) {
+    if (mappedUid === uid) return legacyName;
+  }
+  return null;
 }
 
-/**
- * 純 LIFF：以 linkedLegacy 為準，或以 name + firebaseUid 與 nameToUid 三者一致（舊資料）。
- * 禁止「nameToUid 只要有值就算綁定」——會與別人的排行榜名撞名時誤判。
- */
-async function isLiffLegacyBound(lineBinding) {
-  if (!lineBinding) return false;
-  if (lineBinding.linkedLegacy === true && lineBinding.name) return true;
-  const n = lineBinding.name;
-  if (!n || lineBinding.firebaseUid == null || lineBinding.firebaseUid === '') return false;
-  const mapSnap = await get(dbRef(database, `nameToUid/${n}`));
-  return mapSnap.val() === lineBinding.firebaseUid;
+/** Firebase 登入：只靠 users + nameToUid 判斷，避免讀 lineUsers 觸發權限錯誤 */
+async function isFirebaseLegacyBound(user, userProfile) {
+  if (userProfile?.legacyName) return true;
+  if (!user?.uid) return false;
+  const mappedLegacyName = await getMappedLegacyNameByUid(user.uid);
+  return !!mappedLegacyName;
 }
 
 /**
@@ -215,18 +208,11 @@ async function computeLegacyBoundState() {
   if (currentUser.value) {
     const userProfileSnapshot = await get(dbRef(database, `users/${currentUser.value.uid}`));
     const userProfile = userProfileSnapshot.val() || {};
-    const lineUid = getLineProviderUid(currentUser.value);
-    let lineBinding = null;
-    if (lineUid) {
-      const lineBindingSnapshot = await get(dbRef(database, `lineUsers/${lineUid}`));
-      lineBinding = lineBindingSnapshot.val();
-    }
-    return isFirebaseLegacyBound(currentUser.value, userProfile, lineBinding);
+    return isFirebaseLegacyBound(currentUser.value, userProfile);
   }
   if (liffProfile.value?.userId) {
-    const lineBindingSnapshot = await get(dbRef(database, `lineUsers/${liffProfile.value.userId}`));
-    const lineBinding = lineBindingSnapshot.val();
-    return isLiffLegacyBound(lineBinding);
+    // lineUsers 對前端是不可讀，LIFF-only 無法在前端準確判斷，預設顯示可綁定入口
+    return false;
   }
   return true;
 }
@@ -392,15 +378,10 @@ async function ensureUserLinkState(user) {
   if (lineUid) {
     await syncLineUserFirebaseOnly(user);
   }
-  let lineBinding = null;
-  if (lineUid) {
-    const lineBindingSnapshot = await get(dbRef(database, `lineUsers/${lineUid}`));
-    lineBinding = lineBindingSnapshot.val();
-  }
-
-  const legacyBound = await isFirebaseLegacyBound(user, userProfile, lineBinding);
+  const mappedLegacyName = await getMappedLegacyNameByUid(user.uid);
+  const legacyBound = await isFirebaseLegacyBound(user, userProfile);
   if (legacyBound) {
-    const boundName = userProfile.legacyName || lineBinding?.name;
+    const boundName = userProfile.legacyName || mappedLegacyName;
     if (boundName) {
       await syncLineUserBinding(user, boundName);
     }
@@ -413,12 +394,9 @@ async function ensureUserLinkState(user) {
   const legacyData = legacySnapshot.val() || {};
   const keys = Object.keys(legacyData);
 
+  // 沒有待認領舊資料時，不強制寫 users，避免少數裝置在登入瞬間因權限/時序拋 Permission denied
   if (keys.length === 0) {
-    await set(userProfileRef, {
-      displayName: user.displayName || null,
-      legacyName: null,
-      updatedAt: Date.now()
-    });
+    // no-op
   }
 
   showLinkModal.value = false;
