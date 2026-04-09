@@ -380,7 +380,7 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
             const countResult = await incrementCounterAtPath(`poopCounterByUser/${lineBinding.firebaseUid}`);
             await notifyLineUser(
               event,
-              `✅ ${lineBinding?.name || "你"} +1 成功\n今日第 ${countResult.todayCount} 次，本月累計 ${countResult.totalCount} 次`
+              `✅ ${lineBinding?.name || "你"} +1 成功`
             );
             continue;
           }
@@ -404,7 +404,7 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
         if (countResult) {
           await notifyLineUser(
             event,
-            `✅ ${targetName} +1 成功\n今日第 ${countResult.todayCount} 次，本月累計 ${countResult.totalCount} 次`
+            `✅ ${targetName} +1 成功`
           );
         }
       }
