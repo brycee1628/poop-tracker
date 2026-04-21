@@ -341,25 +341,6 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
         continue;
       }
 
-      // 處理刪除指令
-      const deleteMatch = msg.match(/^(.+?)\s+delete$/i);
-      if (deleteMatch) {
-        const name = deleteMatch[1].trim();
-        const userRef = db.ref(`poopCounter/${name}`);
-
-        // 檢查用戶是否存在
-        const userSnapshot = await userRef.once("value");
-        if (userSnapshot.exists()) {
-          // 刪除用戶資料
-          await userRef.remove();
-          console.log(`🗑️ 已刪除用戶: ${name}`);
-        } else {
-          console.log(`⚠️ 用戶不存在: ${name}`);
-        }
-
-        continue;
-      }
-
       // 處理 +1 計數（支援「名字 +1」和純「+1」）
       const namedCountMatch = msg.match(/^(.+?)\s*\+1$/);
       const plainPlusOne = msg === "+1";
