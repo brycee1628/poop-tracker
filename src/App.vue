@@ -22,12 +22,14 @@ const currentUser = ref(null);
 const authError = ref('');
 const showLinkModal = ref(false);
 const linking = ref(false);
+const unbinding = ref(false);
 const linkError = ref('');
 const unlinkedLegacyNames = ref([]);
 const selectedLegacyName = ref('');
 const liffProfile = ref(null);
 const needsBinding = ref(false);
 const isLoggedIn = computed(() => !!currentUser.value || !!liffProfile.value);
+const isDev = import.meta.env.DEV;
 
 const LEGACY_BIND_DISMISSED_KEY = 'pt_legacyBindDismissedEmpty';
 
@@ -192,6 +194,43 @@ async function getMappedLegacyNameByUid(uid) {
   return null;
 }
 
+function normalizePoopNode(val) {
+  if (val == null) return { count: 0, declaration: null, dailyRecords: {} };
+  if (typeof val === 'number') return { count: val, declaration: null, dailyRecords: {} };
+  return {
+    count: val.count || 0,
+    declaration: val.declaration || null,
+    dailyRecords: val.dailyRecords || {}
+  };
+}
+
+function mergeDailyRecords(base = {}, incoming = {}) {
+  const merged = { ...base };
+  Object.entries(incoming).forEach(([date, record]) => {
+    const baseObj = typeof merged[date] === 'number'
+      ? { count: merged[date], times: [] }
+      : (merged[date] || { count: 0, times: [] });
+    const incomingObj = typeof record === 'number'
+      ? { count: record, times: [] }
+      : (record || { count: 0, times: [] });
+    merged[date] = {
+      count: (baseObj.count || 0) + (incomingObj.count || 0),
+      times: [...(baseObj.times || []), ...(incomingObj.times || [])]
+    };
+  });
+  return merged;
+}
+
+function mergePoopNodes(legacyVal, uidVal) {
+  const legacy = normalizePoopNode(legacyVal);
+  const byUid = normalizePoopNode(uidVal);
+  return {
+    count: (legacy.count || 0) + (byUid.count || 0),
+    declaration: legacy.declaration || byUid.declaration || null,
+    dailyRecords: mergeDailyRecords(legacy.dailyRecords, byUid.dailyRecords)
+  };
+}
+
 /** Firebase 登入：只靠 users + nameToUid 判斷，避免讀 lineUsers 觸發權限錯誤 */
 async function isFirebaseLegacyBound(user, userProfile) {
   if (userProfile?.legacyName) return true;
@@ -211,9 +250,9 @@ async function computeLegacyBoundState() {
     return isFirebaseLegacyBound(currentUser.value, userProfile);
   }
   if (liffProfile.value?.userId) {
-    // lineUsers 對前端不可讀；LIFF-only 無法可靠判斷綁定狀態。
-    // 為避免「已綁定（可 +1）卻一直顯示綁定按鈕」的誤導，LIFF-only 預設視為已處理。
-    return true;
+    // lineUsers 對前端不可讀；LIFF-only 無法可靠判斷是否已綁定。
+    // 為了讓 LINE 內建瀏覽器能進入綁定流程，LIFF-only 預設視為「尚未綁定」。
+    return false;
   }
   return true;
 }
@@ -504,6 +543,65 @@ async function openBindingSelector() {
       '後端「尚未認領」的舊名稱清單為空（poopCounter 無資料）。若你確定排行榜上還有你的舊名稱，請管理員檢查 Firebase 的 poopCounter 是否已被清空，或你是否已用其他帳號綁定。';
   }
 }
+
+async function unbindForTesting() {
+  if (!currentUser.value || unbinding.value) return;
+  const ok = window.confirm('解除綁定後會把你目前資料搬回舊格式（poopCounter），僅供測試。要繼續嗎？');
+  if (!ok) return;
+
+  unbinding.value = true;
+  linkError.value = '';
+  try {
+    const uid = currentUser.value.uid;
+    const userRef = dbRef(database, `users/${uid}`);
+    const uidRef = dbRef(database, `poopCounterByUser/${uid}`);
+    const [userSnap, uidSnap] = await Promise.all([
+      get(userRef),
+      get(uidRef)
+    ]);
+
+    const userProfile = userSnap.val() || {};
+    const legacyName = userProfile.legacyName || (await getMappedLegacyNameByUid(uid));
+    if (!legacyName) {
+      throw new Error('找不到目前綁定的舊名稱，無法解除。');
+    }
+
+    const legacyRef = dbRef(database, `poopCounter/${legacyName}`);
+    const legacySnap = await get(legacyRef);
+    const uidData = uidSnap.val();
+    const legacyData = legacySnap.val();
+
+    if (uidData != null) {
+      await set(legacyRef, mergePoopNodes(legacyData, uidData));
+      await remove(uidRef);
+    }
+
+    await Promise.all([
+      remove(dbRef(database, `nameToUid/${legacyName}`)),
+      update(userRef, {
+        legacyName: null,
+        updatedAt: Date.now()
+      })
+    ]);
+
+    const lineUid = getLineProviderUid(currentUser.value);
+    if (lineUid) {
+      await update(dbRef(database, `lineUsers/${lineUid}`), {
+        name: null,
+        linkedLegacy: null,
+        updatedAt: Date.now()
+      });
+    }
+
+    needsBinding.value = true;
+    await refreshLegacyBindingUi();
+    window.alert('已解除綁定並回到舊格式，你現在可以重測綁定流程。');
+  } catch (error) {
+    linkError.value = error?.message || '解除綁定失敗，請稍後再試。';
+  } finally {
+    unbinding.value = false;
+  }
+}
 </script>
 
 <template>
@@ -517,6 +615,14 @@ async function openBindingSelector() {
         <template v-if="isLoggedIn">
           <span class="auth-text">{{ displayUserName }}</span>
           <button v-if="needsBinding" class="auth-button secondary" @click="openBindingSelector">綁定ID</button>
+          <button
+            v-if="currentUser && isDev"
+            class="auth-button danger"
+            :disabled="unbinding"
+            @click="unbindForTesting"
+          >
+            {{ unbinding ? '解除中...' : '解除綁定(測試)' }}
+          </button>
           <button class="auth-button logout" @click="logout">登出</button>
         </template>
         <template v-else>
@@ -590,6 +696,10 @@ async function openBindingSelector() {
 
 .auth-button.secondary {
   background-color: #888;
+}
+
+.auth-button.danger {
+  background-color: #b00020;
 }
 
 .auth-error {
