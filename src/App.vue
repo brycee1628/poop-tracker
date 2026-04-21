@@ -195,13 +195,29 @@ async function getMappedLegacyNameByUid(uid) {
 }
 
 function normalizePoopNode(val) {
-  if (val == null) return { count: 0, declaration: null, dailyRecords: {} };
-  if (typeof val === 'number') return { count: val, declaration: null, dailyRecords: {} };
+  if (val == null) return { count: 0, declaration: null, dailyRecords: {}, achievements: {} };
+  if (typeof val === 'number') return { count: val, declaration: null, dailyRecords: {}, achievements: {} };
   return {
     count: val.count || 0,
     declaration: val.declaration || null,
-    dailyRecords: val.dailyRecords || {}
+    dailyRecords: val.dailyRecords || {},
+    achievements: val.achievements && typeof val.achievements === 'object' ? val.achievements : {}
   };
+}
+
+function mergeAchievements(base = {}, incoming = {}) {
+  const merged = { ...base };
+  Object.entries(incoming).forEach(([id, incomingAchievement]) => {
+    const existing = merged[id] || {};
+    merged[id] = {
+      ...existing,
+      ...incomingAchievement,
+      unlocked: Boolean(existing.unlocked || incomingAchievement?.unlocked),
+      unlockDate: existing.unlockDate || incomingAchievement?.unlockDate || null,
+      timestamp: Math.max(existing.timestamp || 0, incomingAchievement?.timestamp || 0)
+    };
+  });
+  return merged;
 }
 
 function mergeDailyRecords(base = {}, incoming = {}) {
@@ -227,7 +243,8 @@ function mergePoopNodes(legacyVal, uidVal) {
   return {
     count: (legacy.count || 0) + (byUid.count || 0),
     declaration: legacy.declaration || byUid.declaration || null,
-    dailyRecords: mergeDailyRecords(legacy.dailyRecords, byUid.dailyRecords)
+    dailyRecords: mergeDailyRecords(legacy.dailyRecords, byUid.dailyRecords),
+    achievements: mergeAchievements(legacy.achievements, byUid.achievements)
   };
 }
 
@@ -470,9 +487,8 @@ async function linkSelectedLegacyData() {
         throw new Error('找不到舊資料，可能已被綁定。');
       }
 
-      if (uidData === null) {
-        await set(uidRef, legacyData);
-      }
+      const mergedData = uidData === null ? legacyData : mergePoopNodes(legacyData, uidData);
+      await set(uidRef, mergedData);
 
       await Promise.all([
         remove(legacyRef),

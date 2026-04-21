@@ -105,15 +105,31 @@ function buildNowInTaipei() {
 }
 
 function normalizePoopNode(val) {
-  if (val == null) return { count: 0, declaration: null, dailyRecords: {} };
+  if (val == null) return { count: 0, declaration: null, dailyRecords: {}, achievements: {} };
   if (typeof val === "number") {
-    return { count: val, declaration: null, dailyRecords: {} };
+    return { count: val, declaration: null, dailyRecords: {}, achievements: {} };
   }
   return {
     count: val.count || 0,
     declaration: val.declaration || null,
     dailyRecords: val.dailyRecords && typeof val.dailyRecords === "object" ? val.dailyRecords : {},
+    achievements: val.achievements && typeof val.achievements === "object" ? val.achievements : {},
   };
+}
+
+function mergeAchievements(base = {}, incoming = {}) {
+  const merged = { ...base };
+  Object.entries(incoming).forEach(([id, incomingAchievement]) => {
+    const existing = merged[id] || {};
+    merged[id] = {
+      ...existing,
+      ...incomingAchievement,
+      unlocked: Boolean(existing.unlocked || incomingAchievement?.unlocked),
+      unlockDate: existing.unlockDate || incomingAchievement?.unlockDate || null,
+      timestamp: Math.max(existing.timestamp || 0, incomingAchievement?.timestamp || 0),
+    };
+  });
+  return merged;
 }
 
 function mergeDailyRecords(base = {}, incoming = {}) {
@@ -141,6 +157,7 @@ function mergePoopNodes(existingVal, legacyVal) {
     count: (a.count || 0) + (b.count || 0),
     declaration: a.declaration || b.declaration || null,
     dailyRecords: mergeDailyRecords(a.dailyRecords, b.dailyRecords),
+    achievements: mergeAchievements(a.achievements, b.achievements),
   };
 }
 
