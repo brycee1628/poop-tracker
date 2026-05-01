@@ -442,12 +442,26 @@ exports.monthlyReset = onSchedule(
 
       const poopRef = db.ref("poopCounter");
       const snapshot = await poopRef.once("value");
-      const data = snapshot.val();
+      const data = snapshot.val() || {};
 
-      if (!data) {
+      const userPoopRef = db.ref('poopCounterByUser');
+      const userSnapshot = await userPoopRef.once('value');
+      const userCounterData = userSnapshot.val() || {};
+
+      if (Object.keys(data).length === 0 && Object.keys(userCounterData).length === 0) {
         console.log("💤 沒有排行榜資料，跳過結算");
         return null;
       }
+
+      const nameToUidRef = db.ref('nameToUid');
+      const nameToUidSnapshot = await nameToUidRef.once('value');
+      const nameToUidData = nameToUidSnapshot.val() || {};
+      const uidToName = {};
+      Object.entries(nameToUidData).forEach(([legacyName, uid]) => {
+        if (uid) {
+          uidToName[uid] = legacyName;
+        }
+      });
 
       // 檢查是否已經備份過這個月份
       const backupRef = db.ref(`monthlyHistory/${backupYear}-${monthString}`);
@@ -458,32 +472,65 @@ exports.monthlyReset = onSchedule(
         return null;
       }
 
-      // 備份數據到對應月份
-      await backupRef.set(data);
+      const buildBackupData = () => {
+        const backup = {};
+
+        Object.entries(data).forEach(([legacyName, entry]) => {
+          backup[legacyName] = entry;
+        });
+
+        Object.entries(userCounterData).forEach(([uid, entry]) => {
+          const legacyName = uidToName[uid];
+          if (legacyName) {
+            if (backup[legacyName]) {
+              backup[legacyName] = mergePoopNodes(backup[legacyName], entry);
+            } else {
+              backup[legacyName] = entry;
+            }
+          } else {
+            backup[uid] = entry;
+          }
+        });
+
+        return backup;
+      };
+
+      const backupData = buildBackupData();
+      await backupRef.set(backupData);
       console.log(`📦 已備份 ${backupYear}-${monthString} 的資料`);
 
-      // 重置所有用戶資料，但保留宣言
-      const resetData = {};
+      const buildResetData = (sourceData) => {
+        const result = {};
+        Object.entries(sourceData).forEach(([key, entry]) => {
+          if (typeof entry === 'number') {
+            result[key] = {
+              count: 0,
+              dailyRecords: {}
+            };
+            return;
+          }
 
-      Object.entries(data).forEach(([name, userData]) => {
-        if (typeof userData === 'number') {
-          // 處理舊格式用戶（純數字）
-          resetData[name] = {
+          result[key] = {
             count: 0,
+            declaration: entry.declaration || null,
             dailyRecords: {}
           };
-        } else {
-          // 處理新格式用戶（對象格式）
-          resetData[name] = {
-            count: 0,
-            declaration: userData.declaration || null, // 保留宣言
-            dailyRecords: {}
-          };
-        }
-      });
+          if (entry && typeof entry.achievements === 'object') {
+            result[key].achievements = entry.achievements;
+          }
+        });
+        return result;
+      };
+
+      const resetData = buildResetData(data);
+      const resetUserData = buildResetData(userCounterData);
 
       // 更新資料庫
       await poopRef.set(resetData);
+      if (Object.keys(resetUserData).length > 0) {
+        await userPoopRef.set(resetUserData);
+        console.log(`📦 已重置 poopCounterByUser 的資料`);
+      }
 
       console.log(`✅ 已重置排行榜，保留 ${Object.keys(resetData).length} 位用戶的宣言`);
       console.log(`📊 重置的用戶: ${Object.keys(resetData).join(', ')}`);
