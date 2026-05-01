@@ -161,6 +161,37 @@ function mergePoopNodes(existingVal, legacyVal) {
   };
 }
 
+function filterEntryByMonth(entry, year, month) {
+  if (entry == null || typeof entry === 'number') return entry;
+
+  const monthPrefix = `${year}-${String(month).padStart(2, '0')}-`;
+  const filteredDailyRecords = {};
+  Object.entries(entry.dailyRecords || {}).forEach(([date, record]) => {
+    if (date.startsWith(monthPrefix)) {
+      filteredDailyRecords[date] = record;
+    }
+  });
+
+  const count = Object.values(filteredDailyRecords).reduce((sum, record) => {
+    if (typeof record === 'number') return sum + record;
+    return sum + (record?.count || 0);
+  }, 0);
+
+  const hasDailyRecords = entry.dailyRecords && typeof entry.dailyRecords === 'object';
+  return {
+    ...entry,
+    count:
+      Object.keys(filteredDailyRecords).length > 0
+        ? count
+        : hasDailyRecords
+        ? 0
+        : typeof entry.count === 'number'
+        ? entry.count
+        : 0,
+    dailyRecords: filteredDailyRecords,
+  };
+}
+
 async function incrementCounterAtPath(path) {
   const targetRef = db.ref(path);
   const { dateString, timeString } = buildNowInTaipei();
@@ -487,19 +518,20 @@ exports.monthlyReset = onSchedule(
         const backup = {};
 
         Object.entries(data).forEach(([legacyName, entry]) => {
-          backup[legacyName] = entry;
+          backup[legacyName] = filterEntryByMonth(entry, backupYear, backupMonth);
         });
 
         Object.entries(userCounterData).forEach(([uid, entry]) => {
           const legacyName = uidToName[uid];
+          const filteredEntry = filterEntryByMonth(entry, backupYear, backupMonth);
           if (legacyName) {
             if (backup[legacyName]) {
-              backup[legacyName] = mergePoopNodes(backup[legacyName], entry);
+              backup[legacyName] = mergePoopNodes(backup[legacyName], filteredEntry);
             } else {
-              backup[legacyName] = entry;
+              backup[legacyName] = filteredEntry;
             }
           } else {
-            backup[uid] = entry;
+            backup[uid] = filteredEntry;
           }
         });
 

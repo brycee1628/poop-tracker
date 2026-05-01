@@ -290,6 +290,16 @@ async function fetchMonthData() {
         let data = snapshot.val();
 
         if (data === null) {
+            // 綁定會員可能長期以 uid 為 key 存歷史資料，若 userName 是 legacyName 則嘗試 fallback
+            const uidSnapshot = await get(dbRef(database, `nameToUid/${userName}`));
+            const uid = uidSnapshot.val();
+            if (uid) {
+                const fallbackSnapshot = await get(dbRef(database, `monthlyHistory/${selectedMonth.value}/${uid}`));
+                data = fallbackSnapshot.val();
+            }
+        }
+
+        if (data === null) {
             userData.value = { count: 0 };
             dailyRecords.value = generateEmptyDailyRecords(selectedMonth.value);
         } else if (typeof data === 'number') {
