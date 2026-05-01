@@ -456,9 +456,20 @@ exports.monthlyReset = onSchedule(
       const nameToUidRef = db.ref('nameToUid');
       const nameToUidSnapshot = await nameToUidRef.once('value');
       const nameToUidData = nameToUidSnapshot.val() || {};
+      const usersSnapshot = await db.ref('users').once('value');
+      const usersData = usersSnapshot.val() || {};
       const uidToName = {};
+
       Object.entries(nameToUidData).forEach(([legacyName, uid]) => {
         if (uid) {
+          uidToName[uid] = legacyName;
+        }
+      });
+
+      // 使用 users/{uid}.legacyName 作為備援，避免 nameToUid 映射不完整時歷史資料跑到 uid key
+      Object.entries(usersData).forEach(([uid, profile]) => {
+        const legacyName = profile?.legacyName;
+        if (legacyName && !uidToName[uid]) {
           uidToName[uid] = legacyName;
         }
       });
