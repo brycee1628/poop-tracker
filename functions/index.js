@@ -842,9 +842,17 @@ async function fetchOsmToiletsAround(lat, lon, radiusM) {
   const q = overpassToiletsQuery(radiusM, lat, lon);
   const body = new URLSearchParams();
   body.set("data", q);
+  // overpass-api.de 會對無 User-Agent 或通用 UA 回 406（見 OSM 使用規範）
+  const ua =
+    process.env.OVERPASS_USER_AGENT ||
+    "poop-tracker-nearbyToilets/1.0 (Firebase Function; OSM public toilets query)";
   const r = await fetch(OVERPASS_INTERPRETER, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+      "User-Agent": ua,
+    },
     body: body.toString(),
   });
   if (!r.ok) {
