@@ -161,6 +161,90 @@ function mergePoopNodes(existingVal, legacyVal) {
   };
 }
 
+/** 只保留 YYYY-MM- 開頭的日期鍵（與 buildNowInTaipei 同日曆月） */
+function pruneDailyRecordsByMonthPrefix(dailyRecords, monthPrefix) {
+  if (!dailyRecords || typeof dailyRecords !== "object") return {};
+  const out = {};
+  Object.entries(dailyRecords).forEach(([date, record]) => {
+    if (date.startsWith(monthPrefix)) out[date] = record;
+  });
+  return out;
+}
+
+function sumDailyRecordsCounts(dailyRecords) {
+  return Object.values(dailyRecords || {}).reduce((sum, record) => {
+    if (typeof record === "number") return sum + record;
+    return sum + (record?.count || 0);
+  }, 0);
+}
+
+async function loadUidToName() {
+  const nameToUidSnapshot = await db.ref("nameToUid").once("value");
+  const nameToUidData = nameToUidSnapshot.val() || {};
+  const usersSnapshot = await db.ref("users").once("value");
+  const usersData = usersSnapshot.val() || {};
+  const uidToName = {};
+  Object.entries(nameToUidData).forEach(([legacyName, uid]) => {
+    if (uid) uidToName[uid] = legacyName;
+  });
+  Object.entries(usersData).forEach(([uid, profile]) => {
+    const legacyName = profile?.legacyName;
+    if (legacyName && !uidToName[uid]) uidToName[uid] = legacyName;
+  });
+  return uidToName;
+}
+
+/** 從即時 poopCounter + poopCounterByUser 切出指定年月的備份切片（與月底結算相同鍵規則） */
+function buildMonthSliceFromLive(data, userCounterData, uidToName, year, month) {
+  const backup = {};
+  Object.entries(data).forEach(([legacyName, entry]) => {
+    backup[legacyName] = filterEntryByMonth(entry, year, month);
+  });
+  Object.entries(userCounterData).forEach(([uid, entry]) => {
+    const legacyName = uidToName[uid];
+    const filteredEntry = filterEntryByMonth(entry, year, month);
+    if (legacyName) {
+      if (backup[legacyName]) {
+        backup[legacyName] = mergePoopNodes(backup[legacyName], filteredEntry);
+      } else {
+        backup[legacyName] = filteredEntry;
+      }
+    } else {
+      backup[uid] = filteredEntry;
+    }
+  });
+  return backup;
+}
+
+function poopSliceHasData(entry) {
+  if (entry == null) return false;
+  if (typeof entry === "number") return entry !== 0;
+  return (
+    (entry.count || 0) > 0 ||
+    (entry.dailyRecords && Object.keys(entry.dailyRecords).length > 0)
+  );
+}
+
+/** 從單一使用者節點移除指定年月的每日鍵，並重算 count（僅物件格式） */
+function stripMonthFromPoopEntry(entry, year, month) {
+  if (entry == null || typeof entry === "number") return entry;
+  const monthPrefix = `${year}-${String(month).padStart(2, "0")}-`;
+  const dailyRecords = { ...(entry.dailyRecords || {}) };
+  let changed = false;
+  Object.keys(dailyRecords).forEach((d) => {
+    if (d.startsWith(monthPrefix)) {
+      delete dailyRecords[d];
+      changed = true;
+    }
+  });
+  if (!changed) return entry;
+  return {
+    ...entry,
+    count: sumDailyRecordsCounts(dailyRecords),
+    dailyRecords,
+  };
+}
+
 function filterEntryByMonth(entry, year, month) {
   if (entry == null || typeof entry === 'number') return entry;
 
@@ -195,6 +279,7 @@ function filterEntryByMonth(entry, year, month) {
 async function incrementCounterAtPath(path) {
   const targetRef = db.ref(path);
   const { dateString, timeString } = buildNowInTaipei();
+  const monthPrefix = `${dateString.slice(0, 7)}-`;
 
   const txResult = await targetRef.transaction((current) => {
     if (!current) {
@@ -221,7 +306,9 @@ async function incrementCounterAtPath(path) {
       };
     }
 
-    const newDailyRecords = { ...(current.dailyRecords || {}) };
+    // 綁定 uid 路徑若換月重置曾略過，會累積多個月份的日期鍵；每次 +1 僅保留「台北當月」並重算 count
+    const baseDaily = pruneDailyRecordsByMonthPrefix(current.dailyRecords, monthPrefix);
+    const newDailyRecords = { ...baseDaily };
     if (!newDailyRecords[dateString]) {
       newDailyRecords[dateString] = { count: 1, times: [timeString] };
     } else if (typeof newDailyRecords[dateString] === "number") {
@@ -238,7 +325,7 @@ async function incrementCounterAtPath(path) {
 
     return {
       ...current,
-      count: (current.count || 0) + 1,
+      count: sumDailyRecordsCounts(newDailyRecords),
       dailyRecords: newDailyRecords,
     };
   });
@@ -443,6 +530,187 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
   res.status(200).send("OK");
 });
 
+/**
+ * @param {{ forceBackup?: boolean, skipReset?: boolean }} options
+ * forceBackup: 強制覆寫 monthlyHistory（補空備份／修正錯誤備份）
+ * skipReset: 只寫歷史備份，不清空 poopCounter / poopCounterByUser（保留本月即時資料）
+ */
+async function executeMonthlyReset(options = {}) {
+  const forceBackup = Boolean(options.forceBackup);
+  const skipReset = Boolean(options.skipReset);
+
+  const now = new Date();
+  const taipeiTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" }));
+
+  const lastMonthDate = new Date(taipeiTime);
+  lastMonthDate.setDate(1);
+  lastMonthDate.setMonth(lastMonthDate.getMonth() - 1);
+
+  const backupYear = lastMonthDate.getFullYear();
+  const backupMonth = lastMonthDate.getMonth() + 1;
+  const monthString = String(backupMonth).padStart(2, "0");
+
+  console.log(`🗓️ 當前台北時間: ${taipeiTime.toISOString()}`);
+  console.log(`📅 備份上個月: ${backupYear}-${monthString} (forceBackup=${forceBackup}, skipReset=${skipReset})`);
+
+  const poopRef = db.ref("poopCounter");
+  const snapshot = await poopRef.once("value");
+  const data = snapshot.val() || {};
+
+  const userPoopRef = db.ref("poopCounterByUser");
+  const userSnapshot = await userPoopRef.once("value");
+  const userCounterData = userSnapshot.val() || {};
+
+  if (Object.keys(data).length === 0 && Object.keys(userCounterData).length === 0) {
+    console.log("💤 沒有排行榜資料，跳過結算");
+    return {
+      skipped: true,
+      reason: "no_live_data",
+      backupMonthKey: `${backupYear}-${monthString}`,
+      wroteBackup: false,
+      didReset: false,
+    };
+  }
+
+  const uidToName = await loadUidToName();
+
+  const backupRef = db.ref(`monthlyHistory/${backupYear}-${monthString}`);
+  const existingBackup = await backupRef.once("value");
+
+  const backupData = buildMonthSliceFromLive(data, userCounterData, uidToName, backupYear, backupMonth);
+  const shouldWriteBackup = !existingBackup.exists() || forceBackup;
+
+  if (shouldWriteBackup) {
+    await backupRef.set(backupData);
+    console.log(`📦 已備份 ${backupYear}-${monthString} 的資料 (${forceBackup ? "強制覆寫" : "首次寫入"})`);
+  } else {
+    console.log(`⚠️ ${backupYear}-${monthString} 備份已存在，略過寫入（加 forceBackup=1 可覆寫）`);
+  }
+
+  const buildResetData = (sourceData) => {
+    const result = {};
+    Object.entries(sourceData).forEach(([key, entry]) => {
+      if (typeof entry === "number") {
+        result[key] = {
+          count: 0,
+          dailyRecords: {},
+        };
+        return;
+      }
+
+      result[key] = {
+        count: 0,
+        declaration: entry.declaration || null,
+        dailyRecords: {},
+      };
+      if (entry && typeof entry.achievements === "object") {
+        result[key].achievements = entry.achievements;
+      }
+    });
+    return result;
+  };
+
+  let didReset = false;
+  if (!skipReset) {
+    const resetData = buildResetData(data);
+    const resetUserData = buildResetData(userCounterData);
+
+    await poopRef.set(resetData);
+    if (Object.keys(resetUserData).length > 0) {
+      await userPoopRef.set(resetUserData);
+      console.log(`📦 已重置 poopCounterByUser 的資料`);
+    }
+
+    console.log(`✅ 已重置排行榜，保留 ${Object.keys(resetData).length} 位用戶的宣言`);
+    console.log(`📊 重置的用戶: ${Object.keys(resetData).join(", ")}`);
+    didReset = true;
+  } else {
+    console.log("⚠️ skipReset=1：未清空 poopCounter / poopCounterByUser");
+  }
+
+  return {
+    skipped: false,
+    backupMonthKey: `${backupYear}-${monthString}`,
+    wroteBackup: shouldWriteBackup,
+    didReset,
+    userKeysInBackup: Object.keys(backupData).length,
+  };
+}
+
+/**
+ * 將「目前即時資料裡仍存在的」指定年月每日紀錄合併進 monthlyHistory，並可選擇從即時節點刪除該月日期鍵（綁定會員主要在 poopCounterByUser）。
+ * @param {{ dryRun?: boolean, stripFromLive?: boolean }} options stripFromLive 預設 true（寫入歷史後從即時移除該月鍵，避免重複）
+ */
+async function backfillMonthHistoryFromLive(targetYear, targetMonth, options = {}) {
+  const dryRun = Boolean(options.dryRun);
+  const stripFromLive = options.stripFromLive !== false;
+
+  const monthString = String(targetMonth).padStart(2, "0");
+  const monthKey = `${targetYear}-${monthString}`;
+
+  const poopRef = db.ref("poopCounter");
+  const userPoopRef = db.ref("poopCounterByUser");
+  const [poopSnap, userSnap] = await Promise.all([poopRef.once("value"), userPoopRef.once("value")]);
+  const data = poopSnap.val() || {};
+  const userCounterData = userSnap.val() || {};
+
+  const uidToName = await loadUidToName();
+  const slice = buildMonthSliceFromLive(data, userCounterData, uidToName, targetYear, targetMonth);
+
+  const backupRef = db.ref(`monthlyHistory/${monthKey}`);
+  const existing = (await backupRef.once("value")).val() || {};
+
+  const merged = { ...existing };
+  let sliceKeysWithData = 0;
+  for (const [key, entry] of Object.entries(slice)) {
+    if (!poopSliceHasData(entry)) continue;
+    sliceKeysWithData += 1;
+    if (merged[key]) {
+      merged[key] = mergePoopNodes(merged[key], entry);
+    } else {
+      merged[key] = entry;
+    }
+  }
+
+  const stripSummary = { poopCounter: 0, poopCounterByUser: 0 };
+
+  if (!dryRun) {
+    await backupRef.set(merged);
+
+    if (stripFromLive) {
+      await Promise.all(
+        Object.entries(data).map(([name, entry]) => {
+          const stripped = stripMonthFromPoopEntry(entry, targetYear, targetMonth);
+          if (stripped !== entry) {
+            stripSummary.poopCounter += 1;
+            return db.ref(`poopCounter/${name}`).set(stripped);
+          }
+          return Promise.resolve();
+        })
+      );
+      await Promise.all(
+        Object.entries(userCounterData).map(([uid, entry]) => {
+          const stripped = stripMonthFromPoopEntry(entry, targetYear, targetMonth);
+          if (stripped !== entry) {
+            stripSummary.poopCounterByUser += 1;
+            return db.ref(`poopCounterByUser/${uid}`).set(stripped);
+          }
+          return Promise.resolve();
+        })
+      );
+    }
+  }
+
+  return {
+    monthKey,
+    sliceKeysWithData,
+    mergedUserKeys: Object.keys(merged).length,
+    dryRun,
+    stripFromLive: dryRun ? false : stripFromLive,
+    stripSummary: dryRun ? null : stripSummary,
+  };
+}
+
 // ✅ 每月自動結算（GCF Gen 2）
 exports.monthlyReset = onSchedule(
   {
@@ -454,130 +722,7 @@ exports.monthlyReset = onSchedule(
   },
   async () => {
     try {
-      // 獲取台北時區的當前日期
-      const now = new Date();
-      // 使用台北時區 (UTC+8)
-      const taipeiTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" }));
-
-      // 計算上個月的年份和月份
-      const lastMonthDate = new Date(taipeiTime);
-      lastMonthDate.setDate(1); // 設置為當月1號
-      lastMonthDate.setMonth(lastMonthDate.getMonth() - 1); // 減去一個月
-
-      const backupYear = lastMonthDate.getFullYear();
-      const backupMonth = lastMonthDate.getMonth() + 1; // 月份從0開始，所以+1
-      const monthString = String(backupMonth).padStart(2, "0");
-
-      console.log(`🗓️ 當前台北時間: ${taipeiTime.toISOString()}`);
-      console.log(`📅 備份上個月: ${backupYear}-${monthString}`);
-
-      const poopRef = db.ref("poopCounter");
-      const snapshot = await poopRef.once("value");
-      const data = snapshot.val() || {};
-
-      const userPoopRef = db.ref('poopCounterByUser');
-      const userSnapshot = await userPoopRef.once('value');
-      const userCounterData = userSnapshot.val() || {};
-
-      if (Object.keys(data).length === 0 && Object.keys(userCounterData).length === 0) {
-        console.log("💤 沒有排行榜資料，跳過結算");
-        return null;
-      }
-
-      const nameToUidRef = db.ref('nameToUid');
-      const nameToUidSnapshot = await nameToUidRef.once('value');
-      const nameToUidData = nameToUidSnapshot.val() || {};
-      const usersSnapshot = await db.ref('users').once('value');
-      const usersData = usersSnapshot.val() || {};
-      const uidToName = {};
-
-      Object.entries(nameToUidData).forEach(([legacyName, uid]) => {
-        if (uid) {
-          uidToName[uid] = legacyName;
-        }
-      });
-
-      // 使用 users/{uid}.legacyName 作為備援，避免 nameToUid 映射不完整時歷史資料跑到 uid key
-      Object.entries(usersData).forEach(([uid, profile]) => {
-        const legacyName = profile?.legacyName;
-        if (legacyName && !uidToName[uid]) {
-          uidToName[uid] = legacyName;
-        }
-      });
-
-      // 檢查是否已經備份過這個月份（僅跳過「寫入備份」，不可跳過重置即時榜，
-      // 否則若備份節點已存在但重置失敗，會導致上月資料永遠留在 poopCounterByUser）
-      const backupRef = db.ref(`monthlyHistory/${backupYear}-${monthString}`);
-      const existingBackup = await backupRef.once("value");
-
-      const buildBackupData = () => {
-        const backup = {};
-
-        Object.entries(data).forEach(([legacyName, entry]) => {
-          backup[legacyName] = filterEntryByMonth(entry, backupYear, backupMonth);
-        });
-
-        Object.entries(userCounterData).forEach(([uid, entry]) => {
-          const legacyName = uidToName[uid];
-          const filteredEntry = filterEntryByMonth(entry, backupYear, backupMonth);
-          if (legacyName) {
-            if (backup[legacyName]) {
-              backup[legacyName] = mergePoopNodes(backup[legacyName], filteredEntry);
-            } else {
-              backup[legacyName] = filteredEntry;
-            }
-          } else {
-            backup[uid] = filteredEntry;
-          }
-        });
-
-        return backup;
-      };
-
-      const backupData = buildBackupData();
-      if (!existingBackup.exists()) {
-        await backupRef.set(backupData);
-        console.log(`📦 已備份 ${backupYear}-${monthString} 的資料`);
-      } else {
-        console.log(`⚠️ ${backupYear}-${monthString} 備份已存在，略過重複寫入（仍會執行重置）`);
-      }
-
-      const buildResetData = (sourceData) => {
-        const result = {};
-        Object.entries(sourceData).forEach(([key, entry]) => {
-          if (typeof entry === 'number') {
-            result[key] = {
-              count: 0,
-              dailyRecords: {}
-            };
-            return;
-          }
-
-          result[key] = {
-            count: 0,
-            declaration: entry.declaration || null,
-            dailyRecords: {}
-          };
-          if (entry && typeof entry.achievements === 'object') {
-            result[key].achievements = entry.achievements;
-          }
-        });
-        return result;
-      };
-
-      const resetData = buildResetData(data);
-      const resetUserData = buildResetData(userCounterData);
-
-      // 更新資料庫
-      await poopRef.set(resetData);
-      if (Object.keys(resetUserData).length > 0) {
-        await userPoopRef.set(resetUserData);
-        console.log(`📦 已重置 poopCounterByUser 的資料`);
-      }
-
-      console.log(`✅ 已重置排行榜，保留 ${Object.keys(resetData).length} 位用戶的宣言`);
-      console.log(`📊 重置的用戶: ${Object.keys(resetData).join(', ')}`);
-
+      await executeMonthlyReset({ forceBackup: false, skipReset: false });
       return null;
     } catch (error) {
       console.error("❌ 月底結算發生錯誤:", error);
@@ -586,13 +731,70 @@ exports.monthlyReset = onSchedule(
   }
 );
 
-
-// ✅ 手動測試 monthlyReset（可從瀏覽器觸發）
+// ✅ 手動觸發結算（瀏覽器或 curl）
+// 範例：只補上個月歷史、不清空本月 → ?forceBackup=1&skipReset=1
+// 若有設定環境變數 MONTHLY_RESET_KEY，必須帶 ?key=該值
 exports.testMonthlyReset = functions.https.onRequest(async (req, res) => {
   try {
-    await exports.monthlyReset.run();
-    res.send("✅ monthlyReset 手動觸發完成！");
+    const requiredKey = process.env.MONTHLY_RESET_KEY;
+    if (requiredKey && req.query.key !== requiredKey) {
+      res.status(403).send("Forbidden");
+      return;
+    }
+
+    const forceBackup = req.query.forceBackup === "1" || req.query.forceBackup === "true";
+    const skipReset = req.query.skipReset === "1" || req.query.skipReset === "true";
+
+    const result = await executeMonthlyReset({ forceBackup, skipReset });
+    res.status(200).json({
+      ok: true,
+      message: "monthlyReset 已執行",
+      forceBackup,
+      skipReset,
+      ...result,
+    });
   } catch (error) {
-    res.status(500).send(`❌ 錯誤: ${error.message}`);
+    console.error(error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// ✅ 補指定月份到 monthlyHistory（從即時 poopCounter / poopCounterByUser 切出該月資料並合併）
+// 範例：year=2026&month=4&dryRun=1 先看會合併幾人；正式執行去掉 dryRun，並可加 stripLive=0 保留即時裡的該月鍵
+// 若有 MONTHLY_RESET_KEY 須帶 key=
+exports.backfillMonthlyHistory = functions.https.onRequest(async (req, res) => {
+  try {
+    const requiredKey = process.env.MONTHLY_RESET_KEY;
+    if (requiredKey && req.query.key !== requiredKey) {
+      res.status(403).send("Forbidden");
+      return;
+    }
+
+    const year = parseInt(req.query.year, 10);
+    const month = parseInt(req.query.month, 10);
+    if (!year || !month || month < 1 || month > 12) {
+      res.status(400).json({
+        ok: false,
+        error: "需要有效的 year、month（例：?year=2026&month=4）",
+      });
+      return;
+    }
+
+    const dryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
+    const stripLive = req.query.stripLive !== "0" && req.query.stripLive !== "false";
+
+    const result = await backfillMonthHistoryFromLive(year, month, {
+      dryRun,
+      stripFromLive: stripLive,
+    });
+
+    res.status(200).json({
+      ok: true,
+      message: dryRun ? "dryRun：未寫入資料庫" : "已合併至 monthlyHistory",
+      ...result,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
