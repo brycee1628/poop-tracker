@@ -1,15 +1,13 @@
 <template>
     <div class="container">
-        <h1>🚽 附近廁所</h1>
-        <p class="subtitle">緊急時刻，不差這幾步。</p>
+        <h1>🚽 找廁所</h1>
 
         <div class="toolbar">
             <label class="radius-label">
                 搜尋半徑
                 <select v-model.number="radiusM" class="radius-select">
-                    <option :value="400">400 m</option>
-                    <option :value="800">800 m</option>
-                    <option :value="1200">1.2 km</option>
+                    <option :value="500">500 m</option>
+                    <option :value="1000">1 km</option>
                     <option :value="2000">2 km</option>
                 </select>
             </label>
@@ -20,10 +18,6 @@
 
         <p v-if="geoError" class="error">{{ geoError }}</p>
         <p v-if="apiError" class="error">{{ apiError }}</p>
-
-        <p v-if="lastPosition" class="hint">
-            位置：{{ lastPosition.lat.toFixed(5) }}, {{ lastPosition.lon.toFixed(5) }}
-        </p>
 
         <ul v-if="toilets.length" class="list">
             <li v-for="(t, i) in toilets" :key="`${t.osmType}-${t.osmId}-${i}`" class="card">
@@ -51,7 +45,7 @@
         <p v-else-if="searched && !loading" class="empty">這個範圍內沒有查到 OSM 上的公共廁所，可加大半徑再試。</p>
 
         <p class="legal">
-            資料來自 <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>（社群標註，可能不完整）。
+            資料來自 <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>
         </p>
     </div>
 </template>
@@ -66,7 +60,7 @@ const toiletsApiBase =
         ? '/api/nearby-toilets'
         : 'https://us-central1-poop-counter-a4309.cloudfunctions.net/nearbyToilets');
 
-const radiusM = ref(800);
+const radiusM = ref(1000);
 const loading = ref(false);
 const geoError = ref('');
 const apiError = ref('');
