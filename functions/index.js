@@ -887,7 +887,7 @@ exports.nearbyToilets = functions.https.onRequest((req, res) => {
         res.status(400).json({ ok: false, error: "經緯度超出範圍" });
         return;
       }
-      if (!Number.isFinite(radius) || radius < 50) radius = 800;
+      if (!Number.isFinite(radius) || radius < 50) radius = 1000;
       if (radius > 5000) radius = 5000;
 
       try {
