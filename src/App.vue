@@ -626,6 +626,7 @@ async function unbindForTesting() {
       { id: 0, pageName: '首頁', url: '/' },
       { id: 1, pageName: '歷屎', url: '/history' },
       { id: 2, pageName: '聖域', url: '/gacha' },
+      { id: 3, pageName: '廁所', url: '/toilets' },
     ]">
       <template #right>
         <template v-if="isLoggedIn">

@@ -1,7 +1,11 @@
 const functions = require("firebase-functions/v1");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
+const cors = require("cors");
+
 admin.initializeApp();
+
+const corsForToilets = cors({ origin: true });
 
 const db = admin.database();
 
@@ -797,4 +801,127 @@ exports.backfillMonthlyHistory = functions.https.onRequest(async (req, res) => {
     console.error(error);
     res.status(500).json({ ok: false, error: error.message });
   }
+});
+
+const OVERPASS_INTERPRETER = "https://overpass-api.de/api/interpreter";
+
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function overpassToiletsQuery(radius, lat, lon) {
+  return `
+[out:json][timeout:25];
+(
+  node["amenity"="toilets"](around:${radius},${lat},${lon});
+  way["amenity"="toilets"](around:${radius},${lat},${lon});
+  relation["amenity"="toilets"](around:${radius},${lat},${lon});
+);
+out center;
+`.trim();
+}
+
+function osmElementToPoint(el) {
+  if (el.type === "node" && el.lat != null && el.lon != null) {
+    return { lat: el.lat, lon: el.lon };
+  }
+  if (el.center && el.center.lat != null && el.center.lon != null) {
+    return { lat: el.center.lat, lon: el.center.lon };
+  }
+  return null;
+}
+
+async function fetchOsmToiletsAround(lat, lon, radiusM) {
+  const q = overpassToiletsQuery(radiusM, lat, lon);
+  const body = new URLSearchParams();
+  body.set("data", q);
+  const r = await fetch(OVERPASS_INTERPRETER, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`Overpass HTTP ${r.status}: ${t.slice(0, 240)}`);
+  }
+  return r.json();
+}
+
+/** 附近公共廁所（OpenStreetMap，經 Overpass 代理）GET ?lat=&lon=&radius= */
+exports.nearbyToilets = functions.https.onRequest((req, res) => {
+  corsForToilets(req, res, () => {
+    void (async () => {
+      if (req.method === "OPTIONS") {
+        res.status(204).end();
+        return;
+      }
+      if (req.method !== "GET") {
+        res.status(405).json({ ok: false, error: "請使用 GET" });
+        return;
+      }
+
+      const lat = parseFloat(req.query.lat);
+      const lon = parseFloat(req.query.lon);
+      let radius = parseInt(req.query.radius, 10);
+
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        res.status(400).json({ ok: false, error: "需要有效的查詢參數 lat、lon（十進位經緯度）" });
+        return;
+      }
+      if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+        res.status(400).json({ ok: false, error: "經緯度超出範圍" });
+        return;
+      }
+      if (!Number.isFinite(radius) || radius < 50) radius = 800;
+      if (radius > 5000) radius = 5000;
+
+      try {
+        const data = await fetchOsmToiletsAround(lat, lon, radius);
+        const elements = data.elements || [];
+        const toilets = [];
+        for (const el of elements) {
+          const p = osmElementToPoint(el);
+          if (!p) continue;
+          const tags = el.tags || {};
+          const dist = haversineMeters(lat, lon, p.lat, p.lon);
+          toilets.push({
+            osmType: el.type,
+            osmId: el.id,
+            lat: p.lat,
+            lon: p.lon,
+            distanceMeters: Math.round(dist),
+            name: tags.name || tags.operator || "公共廁所",
+            fee: tags.fee ?? null,
+            wheelchair: tags.wheelchair ?? null,
+            openingHours: tags.opening_hours ?? null,
+            address:
+              [tags["addr:street"], tags["addr:housenumber"]].filter(Boolean).join(" ").trim() ||
+              null,
+          });
+        }
+        toilets.sort((a, b) => a.distanceMeters - b.distanceMeters);
+
+        res.status(200).json({
+          ok: true,
+          source: "OpenStreetMap / Overpass API",
+          attribution: "資料 © OpenStreetMap 貢獻者，ODbL",
+          count: toilets.length,
+          lat,
+          lon,
+          radiusMeters: radius,
+          toilets,
+        });
+      } catch (error) {
+        console.error("nearbyToilets:", error);
+        res.status(500).json({ ok: false, error: error.message || "Overpass 查詢失敗" });
+      }
+    })();
+  });
 });
