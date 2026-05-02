@@ -24,10 +24,10 @@ const clickBall = () => {
         <div class="navbar-actions">
             <slot name="right"></slot>
         </div>
-        <div class="ball" @click="clickBall" :class="clickBallConfirm ? 'ball-active' : ''">
+        <!-- <div class="ball" @click="clickBall" :class="clickBallConfirm ? 'ball-active' : ''">
             <div class="ball-top"></div>
             <div class="ball-item"></div>
-        </div>
+        </div> -->
     </div>
 </template>
 
