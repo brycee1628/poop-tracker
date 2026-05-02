@@ -72,11 +72,68 @@ import { useRouter } from 'vue-router';
 const router = useRouter();
 const selectedMonth = ref('');
 const availableMonths = ref([]);
-const historyData = ref({});
+/** 原始 monthlyHistory 列（可能含 firebase uid 為 key，綁定用戶備份時若缺映射會如此） */
+const historyDataRaw = ref({});
+const nameToUidMap = ref({});
 const selectedUser = ref('');
 const dailyRecords = ref([]);
 const showTimeModal = ref(false);
 const selectedDay = ref(null);
+
+const uidToDisplayName = computed(() => {
+    const m = {};
+    Object.entries(nameToUidMap.value).forEach(([legacyName, uid]) => {
+        if (uid && m[uid] == null) {
+            m[uid] = legacyName;
+        }
+    });
+    return m;
+});
+
+function mergeDailyRecordsFields(a = {}, b = {}) {
+    const merged = { ...a };
+    Object.entries(b).forEach(([date, rec]) => {
+        const x = merged[date];
+        const xo = typeof x === 'number' ? { count: x, times: [] } : (x || { count: 0, times: [] });
+        const yo = typeof rec === 'number' ? { count: rec, times: [] } : (rec || { count: 0, times: [] });
+        merged[date] = {
+            count: (xo.count || 0) + (yo.count || 0),
+            times: [...(xo.times || []), ...(yo.times || [])]
+        };
+    });
+    return merged;
+}
+
+function mergeMonthUserEntry(a, b) {
+    if (a == null) return b;
+    if (b == null) return a;
+    if (typeof a === 'number' && typeof b === 'number') {
+        return a + b;
+    }
+    const ao = typeof a === 'number' ? { count: a, dailyRecords: {} } : a;
+    const bo = typeof b === 'number' ? { count: b, dailyRecords: {} } : b;
+    return {
+        count: (ao.count || 0) + (bo.count || 0),
+        declaration: ao.declaration || bo.declaration || null,
+        dailyRecords: mergeDailyRecordsFields(ao.dailyRecords, bo.dailyRecords)
+    };
+}
+
+/** 將 uid key 合併為榜單顯示名（與 UserDetail 讀歷史時的 uid fallback 一致） */
+const historyData = computed(() => {
+    const raw = historyDataRaw.value;
+    const uidMap = uidToDisplayName.value;
+    const out = {};
+    for (const [key, val] of Object.entries(raw)) {
+        const displayName = uidMap[key] || key;
+        if (out[displayName] == null) {
+            out[displayName] = val;
+        } else {
+            out[displayName] = mergeMonthUserEntry(out[displayName], val);
+        }
+    }
+    return out;
+});
 
 const sortedHistory = computed(() => {
     // 確保我們有正確的資料格式，處理新舊數據格式
@@ -183,8 +240,7 @@ function fetchHistory() {
 
     const monthRef = dbRef(database, `monthlyHistory/${selectedMonth.value}`);
     onValue(monthRef, (snapshot) => {
-        const data = snapshot.val() || {};
-        historyData.value = data;
+        historyDataRaw.value = snapshot.val() || {};
 
         // 清空已選擇的用戶和每日記錄
         selectedUser.value = '';
@@ -202,6 +258,10 @@ function getPreviousMonth() {
 }
 
 onMounted(() => {
+    onValue(dbRef(database, 'nameToUid'), (snapshot) => {
+        nameToUidMap.value = snapshot.val() || {};
+    });
+
     const monthsRef = dbRef(database, 'monthlyHistory');
     onValue(monthsRef, (snapshot) => {
         const months = snapshot.val();

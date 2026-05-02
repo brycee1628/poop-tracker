@@ -63,6 +63,7 @@
 import { reactive, onMounted, computed, ref as vueRef } from 'vue';
 import { database, ref, onValue, get } from '../firebase';
 import { useRouter } from 'vue-router';
+import { filterEntryByMonth, getTaipeiCalendarParts } from '../utils/poopEntryMonth';
 
 const legacyPoopData = reactive({});
 const uidPoopData = reactive({});
@@ -152,7 +153,17 @@ function rebuildCombinedPoopData() {
         };
     });
 
-    syncReactiveObject(poopData, mergedData);
+    const { year: cy, month: cm } = getTaipeiCalendarParts();
+    const forDisplay = {};
+    Object.entries(mergedData).forEach(([name, data]) => {
+        if (typeof data === 'number') {
+            forDisplay[name] = data;
+        } else {
+            forDisplay[name] = filterEntryByMonth(data, cy, cm);
+        }
+    });
+
+    syncReactiveObject(poopData, forDisplay);
 }
 
 const sortedPoopList = computed(() => {

@@ -79,6 +79,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { database, ref as dbRef, onValue, get } from '../firebase';
 import Achievement from '../components/Achievement.vue';
 import { getUserAchievements, checkNewAchievements, showAchievementNotification, addAchievementNotificationStyles, initializeHistoricalAchievements } from '../utils/achievements';
+import { filterEntryByMonth, getTaipeiCalendarParts } from '../utils/poopEntryMonth';
 
 const route = useRoute();
 const router = useRouter();
@@ -145,6 +146,14 @@ async function fetchHistoricalTotal() {
     const snapshot = await get(historyRef);
     const historyData = snapshot.val() || {};
 
+    let uid = null;
+    try {
+        const uidSnap = await get(dbRef(database, `nameToUid/${userName}`));
+        uid = uidSnap.val() || null;
+    } catch {
+        uid = null;
+    }
+
     let total = 0;
 
     // 遍歷所有月份
@@ -154,13 +163,17 @@ async function fetchHistoricalTotal() {
             continue;
         }
 
-        if (historyData[month][userName]) {
-            const userData = historyData[month][userName];
-            // 處理舊數據格式
-            if (typeof userData === 'number') {
-                total += userData;
+        const monthRow = historyData[month] || {};
+        let row = monthRow[userName];
+        if (row == null && uid) {
+            row = monthRow[uid];
+        }
+
+        if (row != null) {
+            if (typeof row === 'number') {
+                total += row;
             } else {
-                total += userData?.count || 0;
+                total += row?.count || 0;
             }
         }
     }
@@ -172,13 +185,7 @@ async function fetchHistoricalTotal() {
 function generateEmptyDailyRecords(monthString) {
     const records = [];
     if (monthString === 'current') {
-        // 獲取當前日期，考慮台北時區
-        const now = new Date();
-        // 調整為台北時區 (UTC+8)
-        const taipeiTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-        const year = taipeiTime.getUTCFullYear();
-        const month = taipeiTime.getUTCMonth() + 1;
-        const currentDay = taipeiTime.getUTCDate();
+        const { year, month, day: currentDay } = getTaipeiCalendarParts();
         const daysInMonth = getDaysInMonth(year, month);
 
         for (let day = 1; day <= currentDay; day++) {
@@ -223,16 +230,17 @@ async function fetchMonthData() {
 
         // 獲取當前月份數據
         onValue(currentRef, (snapshot) => {
-            const data = snapshot.val();
+            const raw = snapshot.val();
+            const tpCal = getTaipeiCalendarParts();
+            const currentYear = tpCal.year;
+            const currentMonth = tpCal.month;
 
-            // 獲取當前日期，確保使用台北時區
-            const now = new Date();
-            // 調整為台北時區 (UTC+8)
-            const taipeiTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-            const currentYear = taipeiTime.getUTCFullYear();
-            const currentMonth = taipeiTime.getUTCMonth() + 1;
-            const currentDay = taipeiTime.getUTCDate();
-            const todayStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(currentDay).padStart(2, '0')}`;
+            const data =
+                raw == null
+                    ? null
+                    : typeof raw === 'number'
+                      ? raw
+                      : filterEntryByMonth(raw, currentYear, currentMonth);
 
             if (typeof data === 'number') {
                 userData.value = { count: data };
@@ -243,6 +251,9 @@ async function fetchMonthData() {
                     records[0].times = []; // 舊資料沒有時間記錄
                 }
                 dailyRecords.value = records;
+            } else if (data == null) {
+                userData.value = { count: 0 };
+                dailyRecords.value = generateEmptyDailyRecords('current');
             } else {
                 userData.value = data || {};
 

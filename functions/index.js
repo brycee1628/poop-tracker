@@ -505,14 +505,10 @@ exports.monthlyReset = onSchedule(
         }
       });
 
-      // 檢查是否已經備份過這個月份
+      // 檢查是否已經備份過這個月份（僅跳過「寫入備份」，不可跳過重置即時榜，
+      // 否則若備份節點已存在但重置失敗，會導致上月資料永遠留在 poopCounterByUser）
       const backupRef = db.ref(`monthlyHistory/${backupYear}-${monthString}`);
       const existingBackup = await backupRef.once("value");
-
-      if (existingBackup.exists()) {
-        console.log(`⚠️ ${backupYear}-${monthString} 已經備份過，跳過重複備份`);
-        return null;
-      }
 
       const buildBackupData = () => {
         const backup = {};
@@ -539,8 +535,12 @@ exports.monthlyReset = onSchedule(
       };
 
       const backupData = buildBackupData();
-      await backupRef.set(backupData);
-      console.log(`📦 已備份 ${backupYear}-${monthString} 的資料`);
+      if (!existingBackup.exists()) {
+        await backupRef.set(backupData);
+        console.log(`📦 已備份 ${backupYear}-${monthString} 的資料`);
+      } else {
+        console.log(`⚠️ ${backupYear}-${monthString} 備份已存在，略過重複寫入（仍會執行重置）`);
+      }
 
       const buildResetData = (sourceData) => {
         const result = {};
