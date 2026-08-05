@@ -189,6 +189,8 @@ const sortedPoopList = computed(() => {
                 status: status
             };
         })
+        // 本月 0 次不顯示，避免閒置帳號換月後仍佔排行榜
+        .filter((item) => item.count > 0)
         .sort((a, b) => b.count - a.count);
 });
 
