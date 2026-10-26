@@ -345,13 +345,48 @@ async function incrementCounterAtPath(path) {
   };
 }
 
+const HELP_TEXT = [
+  "歡迎使用屎記！",
+  "",
+  "【紀錄】",
+  "遊客模式：請傳「名字 +1」",
+  "例：林北魚仔 +1",
+  "遊客不能沒輸入名字只傳 +1。",
+  "",
+  "會員模式：到網站用 LINE 登入後，就能直接傳 +1，次數記在自己的帳號。",
+  "沒有舊名稱時，排行榜會顯示「使用者-」加上帳號末 6 碼。",
+  "要改成自己的名字，請先登入，再傳：繼承 舊名稱",
+  "例：繼承 林北魚仔",
+  "沒有舊名稱就不用傳，會維持「使用者-」開頭的名稱。",
+  "",
+  "【宣言】",
+  "使用指令：名字:宣言內容（顯示在個人頁；若是榜一，也會出現在首頁跑馬燈。）",
+  "例：林北魚仔:今天也要加油",
+  "",
+  "傳「說明」可再看一次幫助說明。",
+].join("\n");
+
+function isHelpRequest(msg) {
+  return /^(說明|幫助|help|使用方法|你好|哈囉|hi|hello|開始|\?|？)$/i.test(msg);
+}
+
 // ✅ LINE Webhook（GCF Gen 1）
 exports.lineWebhook = functions.https.onRequest(async (req, res) => {
   const events = req.body.events;
 
   for (const event of events) {
+    if (event.type === "follow") {
+      await notifyLineUser(event, HELP_TEXT);
+      continue;
+    }
+
     if (event.type === "message" && event.message.type === "text") {
       const msg = event.message.text.trim();
+
+      if (isHelpRequest(msg)) {
+        await notifyLineUser(event, HELP_TEXT);
+        continue;
+      }
 
       // 繼承舊排行榜：繼承 舊名稱 ／ 綁定 舊名稱（需先在網站用 LINE 登入過一次，lineUsers 才有 firebaseUid）
       const inheritMatch = msg.match(/^(?:繼承|綁定)\s+(.+)$/);
@@ -507,7 +542,10 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
           targetName = lineBinding?.name || null;
           if (!targetName) {
             console.log(`⚠️ +1 找不到綁定名稱: ${lineUserId}`);
-            await notifyLineUser(event, "你還沒完成綁定，請先到網站登入並完成綁定。");
+            await notifyLineUser(
+              event,
+              "遊客模式不能只傳 +1。\n請傳「名字 +1」，例如：林北魚仔 +1\n或先到網站用 LINE 登入並完成綁定，之後才能直接傳 +1。"
+            );
             continue;
           }
         }
@@ -527,6 +565,12 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
             `✅ ${targetName} +1 成功`
           );
         }
+        continue;
+      }
+
+      // 一對一聊天裡看不懂的訊息，直接回使用說明，避免新使用者不知道指令
+      if (event?.source?.type === "user") {
+        await notifyLineUser(event, HELP_TEXT);
       }
     }
   }
