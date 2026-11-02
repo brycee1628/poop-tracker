@@ -108,6 +108,9 @@ async function searchNearby() {
                     return;
                 }
                 toilets.value = data.toilets || [];
+                if (data.version) {
+                    console.info(`[屎記廁所 API] v${data.version}`, data.source || "");
+                }
                 searched.value = true;
             } catch (e) {
                 apiError.value = e.message || '網路錯誤，請確認已部署 nearbyToilets 並允許跨域。';

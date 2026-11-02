@@ -5,6 +5,9 @@ const cors = require("cors");
 
 admin.initializeApp();
 
+/** 與前端 package.json version 對齊；部署後可用 API / LINE「ver」確認 */
+const APP_VERSION = "1.2.0";
+
 const corsForToilets = cors({ origin: true });
 
 const db = admin.database();
@@ -370,6 +373,10 @@ function isHelpRequest(msg) {
   return /^(說明|幫助|help|使用方法|你好|哈囉|hi|hello|開始|\?|？)$/i.test(msg);
 }
 
+function isVersionRequest(msg) {
+  return /^(ver|version|版本)$/i.test(msg);
+}
+
 // ✅ LINE Webhook（GCF Gen 1）
 exports.lineWebhook = functions.https.onRequest(async (req, res) => {
   const events = req.body.events;
@@ -385,6 +392,11 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
 
       if (isHelpRequest(msg)) {
         await notifyLineUser(event, HELP_TEXT);
+        continue;
+      }
+
+      if (isVersionRequest(msg)) {
+        await notifyLineUser(event, `屎記後端 v${APP_VERSION}`);
         continue;
       }
 
@@ -1116,6 +1128,7 @@ exports.nearbyToilets = functions
 
           res.status(200).json({
             ok: true,
+            version: APP_VERSION,
             source: data.source || "OpenStreetMap / Overpass API",
             attribution: "資料 © OpenStreetMap 貢獻者，ODbL",
             count: toilets.length,
@@ -1128,6 +1141,7 @@ exports.nearbyToilets = functions
           console.error("nearbyToilets:", error);
           res.status(500).json({
             ok: false,
+            version: APP_VERSION,
             error: formatOverpassError(error),
           });
         }
