@@ -847,10 +847,11 @@ exports.backfillMonthlyHistory = functions.https.onRequest(async (req, res) => {
   }
 });
 
-// 公開 Overpass 主站常排隊變慢；依序嘗試多個鏡像，縮短等待
+// 公開 Overpass 常塞車；多鏡像並行 + 短暫重試
 const OVERPASS_ENDPOINTS = [
   "https://overpass.kumi.systems/api/interpreter",
   "https://lz4.overpass-api.de/api/interpreter",
+  "https://z.overpass-api.de/api/interpreter",
   "https://overpass-api.de/api/interpreter",
 ];
 
@@ -868,7 +869,7 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
 function overpassToiletsQuery(radius, lat, lon) {
   // 多數公共廁所是 node；附帶 way 即可，略過 relation 以加快查詢
   return `
-[out:json][timeout:10];
+[out:json][timeout:8];
 (
   node["amenity"="toilets"](around:${radius},${lat},${lon});
   way["amenity"="toilets"](around:${radius},${lat},${lon});
@@ -887,9 +888,18 @@ function osmElementToPoint(el) {
   return null;
 }
 
-async function fetchFromOverpassEndpoint(endpoint, queryBody, ua) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isOverpassBusyError(error) {
+  const msg = error?.message || String(error || "");
+  return /HTTP 502|HTTP 503|HTTP 429|at capacity|queue is full|Gateway Timeout|too many requests/i.test(msg);
+}
+
+async function fetchFromOverpassEndpoint(endpoint, queryBody, ua, timeoutMs = 10000) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const r = await fetch(endpoint, {
       method: "POST",
@@ -911,6 +921,31 @@ async function fetchFromOverpassEndpoint(endpoint, queryBody, ua) {
   }
 }
 
+function formatOverpassError(error) {
+  const msg = error?.message || String(error || "");
+  if (isOverpassBusyError(error) || /capacity|queue is full|HTTP 502|HTTP 503/i.test(msg)) {
+    return "附近廁所資料伺服器目前忙碌（Overpass 塞車），請稍後再按一次搜尋。";
+  }
+  if (
+    error?.name === "AbortError" ||
+    /aborted|AbortError|timeout/i.test(msg)
+  ) {
+    return "附近廁所資料來源回應逾時，請稍後再試或改小搜尋半徑。";
+  }
+  return "附近廁所查詢失敗，請稍後再試。";
+}
+
+async function raceOverpassEndpoints(queryBody, ua) {
+  return Promise.any(
+    OVERPASS_ENDPOINTS.map((endpoint) =>
+      fetchFromOverpassEndpoint(endpoint, queryBody, ua, 10000).catch((error) => {
+        console.warn(`⚠️ Overpass 失敗 (${endpoint}):`, error.message || error);
+        throw error;
+      })
+    )
+  );
+}
+
 async function fetchOsmToiletsAround(lat, lon, radiusM) {
   const q = overpassToiletsQuery(radiusM, lat, lon);
   const body = new URLSearchParams();
@@ -922,15 +957,23 @@ async function fetchOsmToiletsAround(lat, lon, radiusM) {
     "poop-tracker-nearbyToilets/1.0 (Firebase Function; OSM public toilets query)";
 
   let lastError = null;
-  for (const endpoint of OVERPASS_ENDPOINTS) {
+  // 第 1 次並行；若全是塞車/逾時，等一下再重試 1 次（指數退避）
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (attempt > 0) {
+      await sleep(800 * attempt);
+    }
     try {
-      return await fetchFromOverpassEndpoint(endpoint, queryBody, ua);
+      return await raceOverpassEndpoints(queryBody, ua);
     } catch (error) {
-      lastError = error;
-      console.warn(`⚠️ Overpass 失敗 (${endpoint}):`, error.message || error);
+      const first = error?.errors?.find(Boolean) || error;
+      lastError = first;
+      const busy =
+        error?.errors?.some((e) => isOverpassBusyError(e)) ||
+        isOverpassBusyError(first);
+      if (!busy && attempt === 0) break;
     }
   }
-  throw lastError || new Error("Overpass 查詢失敗");
+  throw new Error(formatOverpassError(lastError));
 }
 
 /** 附近公共廁所（OpenStreetMap，經 Overpass 代理）GET ?lat=&lon=&radius= */
@@ -999,7 +1042,10 @@ exports.nearbyToilets = functions.https.onRequest((req, res) => {
         });
       } catch (error) {
         console.error("nearbyToilets:", error);
-        res.status(500).json({ ok: false, error: error.message || "Overpass 查詢失敗" });
+        res.status(500).json({
+          ok: false,
+          error: formatOverpassError(error),
+        });
       }
     })();
   });
