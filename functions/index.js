@@ -847,7 +847,12 @@ exports.backfillMonthlyHistory = functions.https.onRequest(async (req, res) => {
   }
 });
 
-const OVERPASS_INTERPRETER = "https://overpass-api.de/api/interpreter";
+// 公開 Overpass 主站常排隊變慢；依序嘗試多個鏡像，縮短等待
+const OVERPASS_ENDPOINTS = [
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://lz4.overpass-api.de/api/interpreter",
+  "https://overpass-api.de/api/interpreter",
+];
 
 function haversineMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000;
@@ -861,12 +866,12 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
 }
 
 function overpassToiletsQuery(radius, lat, lon) {
+  // 多數公共廁所是 node；附帶 way 即可，略過 relation 以加快查詢
   return `
-[out:json][timeout:25];
+[out:json][timeout:10];
 (
   node["amenity"="toilets"](around:${radius},${lat},${lon});
   way["amenity"="toilets"](around:${radius},${lat},${lon});
-  relation["amenity"="toilets"](around:${radius},${lat},${lon});
 );
 out center;
 `.trim();
@@ -882,28 +887,50 @@ function osmElementToPoint(el) {
   return null;
 }
 
+async function fetchFromOverpassEndpoint(endpoint, queryBody, ua) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const r = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+        "User-Agent": ua,
+      },
+      body: queryBody,
+      signal: controller.signal,
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      throw new Error(`Overpass HTTP ${r.status}: ${t.slice(0, 240)}`);
+    }
+    return r.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchOsmToiletsAround(lat, lon, radiusM) {
   const q = overpassToiletsQuery(radiusM, lat, lon);
   const body = new URLSearchParams();
   body.set("data", q);
-  // overpass-api.de 會對無 User-Agent 或通用 UA 回 406（見 OSM 使用規範）
+  const queryBody = body.toString();
+  // overpass 會對無 User-Agent 或通用 UA 回 406（見 OSM 使用規範）
   const ua =
     process.env.OVERPASS_USER_AGENT ||
     "poop-tracker-nearbyToilets/1.0 (Firebase Function; OSM public toilets query)";
-  const r = await fetch(OVERPASS_INTERPRETER, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-      "User-Agent": ua,
-    },
-    body: body.toString(),
-  });
-  if (!r.ok) {
-    const t = await r.text();
-    throw new Error(`Overpass HTTP ${r.status}: ${t.slice(0, 240)}`);
+
+  let lastError = null;
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    try {
+      return await fetchFromOverpassEndpoint(endpoint, queryBody, ua);
+    } catch (error) {
+      lastError = error;
+      console.warn(`⚠️ Overpass 失敗 (${endpoint}):`, error.message || error);
+    }
   }
-  return r.json();
+  throw lastError || new Error("Overpass 查詢失敗");
 }
 
 /** 附近公共廁所（OpenStreetMap，經 Overpass 代理）GET ?lat=&lon=&radius= */

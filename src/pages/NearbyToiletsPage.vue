@@ -123,7 +123,8 @@ async function searchNearby() {
                 geoError.value = '無法取得位置，請稍後再試。';
             }
         },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+        // 找廁所不需要最高精度；關閉 high accuracy 可明顯加快定位
+        { enableHighAccuracy: false, timeout: 8000, maximumAge: 120000 }
     );
 }
 </script>
