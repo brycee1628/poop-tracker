@@ -847,13 +847,17 @@ exports.backfillMonthlyHistory = functions.https.onRequest(async (req, res) => {
   }
 });
 
-// 公開 Overpass 常塞車；多鏡像並行 + 短暫重試
+// 公開 Overpass 常塞車；多鏡像並行 + 重試，失敗再改走 Nominatim
 const OVERPASS_ENDPOINTS = [
-  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
   "https://lz4.overpass-api.de/api/interpreter",
   "https://z.overpass-api.de/api/interpreter",
-  "https://overpass-api.de/api/interpreter",
 ];
+
+const OSM_USER_AGENT =
+  process.env.OVERPASS_USER_AGENT ||
+  "poop-tracker-nearbyToilets/1.0 (Firebase Function; OSM public toilets query)";
 
 function haversineMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000;
@@ -869,7 +873,7 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
 function overpassToiletsQuery(radius, lat, lon) {
   // 多數公共廁所是 node；附帶 way 即可，略過 relation 以加快查詢
   return `
-[out:json][timeout:8];
+[out:json][timeout:20];
 (
   node["amenity"="toilets"](around:${radius},${lat},${lon});
   way["amenity"="toilets"](around:${radius},${lat},${lon});
@@ -894,10 +898,21 @@ function sleep(ms) {
 
 function isOverpassBusyError(error) {
   const msg = error?.message || String(error || "");
-  return /HTTP 502|HTTP 503|HTTP 429|at capacity|queue is full|Gateway Timeout|too many requests/i.test(msg);
+  return /HTTP 502|HTTP 503|HTTP 504|HTTP 429|at capacity|queue is full|Gateway Timeout|too many requests/i.test(
+    msg
+  );
 }
 
-async function fetchFromOverpassEndpoint(endpoint, queryBody, ua, timeoutMs = 10000) {
+function isTransientOverpassError(error) {
+  const msg = error?.message || String(error || "");
+  return (
+    isOverpassBusyError(error) ||
+    error?.name === "AbortError" ||
+    /aborted|AbortError|timeout|ETIMEDOUT|ECONNRESET|fetch failed/i.test(msg)
+  );
+}
+
+async function fetchFromOverpassEndpoint(endpoint, queryBody, ua, timeoutMs = 18000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -923,22 +938,24 @@ async function fetchFromOverpassEndpoint(endpoint, queryBody, ua, timeoutMs = 10
 
 function formatOverpassError(error) {
   const msg = error?.message || String(error || "");
-  if (isOverpassBusyError(error) || /capacity|queue is full|HTTP 502|HTTP 503/i.test(msg)) {
+  if (
+    /附近廁所資料伺服器目前忙碌|附近廁所資料來源回應逾時|附近廁所查詢失敗/.test(msg)
+  ) {
+    return msg;
+  }
+  if (isOverpassBusyError(error) || /capacity|queue is full|HTTP 502|HTTP 503|HTTP 504/i.test(msg)) {
     return "附近廁所資料伺服器目前忙碌（Overpass 塞車），請稍後再按一次搜尋。";
   }
-  if (
-    error?.name === "AbortError" ||
-    /aborted|AbortError|timeout/i.test(msg)
-  ) {
+  if (error?.name === "AbortError" || /aborted|AbortError|timeout/i.test(msg)) {
     return "附近廁所資料來源回應逾時，請稍後再試或改小搜尋半徑。";
   }
   return "附近廁所查詢失敗，請稍後再試。";
 }
 
-async function raceOverpassEndpoints(queryBody, ua) {
+async function raceOverpassEndpoints(queryBody, ua, timeoutMs) {
   return Promise.any(
     OVERPASS_ENDPOINTS.map((endpoint) =>
-      fetchFromOverpassEndpoint(endpoint, queryBody, ua, 10000).catch((error) => {
+      fetchFromOverpassEndpoint(endpoint, queryBody, ua, timeoutMs).catch((error) => {
         console.warn(`⚠️ Overpass 失敗 (${endpoint}):`, error.message || error);
         throw error;
       })
@@ -946,107 +963,174 @@ async function raceOverpassEndpoints(queryBody, ua) {
   );
 }
 
+function radiusToViewbox(lat, lon, radiusM) {
+  const dLat = radiusM / 111320;
+  const cosLat = Math.cos((lat * Math.PI) / 180);
+  const dLon = radiusM / (111320 * Math.max(0.2, cosLat));
+  // Nominatim viewbox: left,top,right,bottom
+  return `${lon - dLon},${lat + dLat},${lon + dLon},${lat - dLat}`;
+}
+
+/** Overpass 全掛時改走 Nominatim（較慢但較穩） */
+async function fetchToiletsFromNominatim(lat, lon, radiusM) {
+  const viewbox = radiusToViewbox(lat, lon, radiusM);
+  const url = new URL("https://nominatim.openstreetmap.org/search");
+  url.searchParams.set("format", "json");
+  url.searchParams.set("amenity", "toilets");
+  url.searchParams.set("limit", "40");
+  url.searchParams.set("bounded", "1");
+  url.searchParams.set("viewbox", viewbox);
+  url.searchParams.set("addressdetails", "0");
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const r = await fetch(url.toString(), {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": OSM_USER_AGENT,
+      },
+      signal: controller.signal,
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      throw new Error(`Nominatim HTTP ${r.status}: ${t.slice(0, 200)}`);
+    }
+    const rows = await r.json();
+    if (!Array.isArray(rows)) {
+      throw new Error("Nominatim 回傳格式異常");
+    }
+    return {
+      elements: rows.map((row) => ({
+        type: row.osm_type || "node",
+        id: row.osm_id || row.place_id,
+        lat: parseFloat(row.lat),
+        lon: parseFloat(row.lon),
+        tags: {
+          name: row.name || "公共廁所",
+          "addr:full": row.display_name || null,
+        },
+      })),
+      source: "OpenStreetMap / Nominatim",
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchOsmToiletsAround(lat, lon, radiusM) {
   const q = overpassToiletsQuery(radiusM, lat, lon);
   const body = new URLSearchParams();
   body.set("data", q);
   const queryBody = body.toString();
-  // overpass 會對無 User-Agent 或通用 UA 回 406（見 OSM 使用規範）
-  const ua =
-    process.env.OVERPASS_USER_AGENT ||
-    "poop-tracker-nearbyToilets/1.0 (Firebase Function; OSM public toilets query)";
 
   let lastError = null;
-  // 第 1 次並行；若全是塞車/逾時，等一下再重試 1 次（指數退避）
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  // 第 1 次較短；塞車/逾時再加長重試 1 次
+  const attemptTimeouts = [12000, 20000];
+  for (let attempt = 0; attempt < attemptTimeouts.length; attempt += 1) {
     if (attempt > 0) {
-      await sleep(800 * attempt);
+      await sleep(700 * attempt);
     }
     try {
-      return await raceOverpassEndpoints(queryBody, ua);
+      const data = await raceOverpassEndpoints(queryBody, OSM_USER_AGENT, attemptTimeouts[attempt]);
+      return { ...data, source: "OpenStreetMap / Overpass API" };
     } catch (error) {
-      const first = error?.errors?.find(Boolean) || error;
-      lastError = first;
-      const busy =
-        error?.errors?.some((e) => isOverpassBusyError(e)) ||
-        isOverpassBusyError(first);
-      if (!busy && attempt === 0) break;
+      const errors = error?.errors?.filter(Boolean) || [error];
+      lastError = errors.find(Boolean) || error;
+      const retryable = errors.some((e) => isTransientOverpassError(e));
+      if (!retryable) break;
     }
   }
-  throw new Error(formatOverpassError(lastError));
+
+  console.warn("⚠️ Overpass 全失敗，改走 Nominatim 備援:", lastError?.message || lastError);
+  try {
+    return await fetchToiletsFromNominatim(lat, lon, radiusM);
+  } catch (nominatimError) {
+    console.error("⚠️ Nominatim 備援也失敗:", nominatimError.message || nominatimError);
+    throw lastError || nominatimError;
+  }
 }
 
-/** 附近公共廁所（OpenStreetMap，經 Overpass 代理）GET ?lat=&lon=&radius= */
-exports.nearbyToilets = functions.https.onRequest((req, res) => {
-  corsForToilets(req, res, () => {
-    void (async () => {
-      if (req.method === "OPTIONS") {
-        res.status(204).end();
-        return;
-      }
-      if (req.method !== "GET") {
-        res.status(405).json({ ok: false, error: "請使用 GET" });
-        return;
-      }
+function mapElementsToToilets(elements, lat, lon) {
+  const toilets = [];
+  for (const el of elements) {
+    const p = osmElementToPoint(el);
+    if (!p || !Number.isFinite(p.lat) || !Number.isFinite(p.lon)) continue;
+    const tags = el.tags || {};
+    const dist = haversineMeters(lat, lon, p.lat, p.lon);
+    toilets.push({
+      osmType: el.type,
+      osmId: el.id,
+      lat: p.lat,
+      lon: p.lon,
+      distanceMeters: Math.round(dist),
+      name: tags.name || tags.operator || "公共廁所",
+      fee: tags.fee ?? null,
+      wheelchair: tags.wheelchair ?? null,
+      openingHours: tags.opening_hours ?? null,
+      address:
+        tags["addr:full"] ||
+        [tags["addr:street"], tags["addr:housenumber"]].filter(Boolean).join(" ").trim() ||
+        null,
+    });
+  }
+  toilets.sort((a, b) => a.distanceMeters - b.distanceMeters);
+  return toilets;
+}
 
-      const lat = parseFloat(req.query.lat);
-      const lon = parseFloat(req.query.lon);
-      let radius = parseInt(req.query.radius, 10);
+/** 附近公共廁所（OpenStreetMap，經 Overpass / Nominatim 代理）GET ?lat=&lon=&radius= */
+exports.nearbyToilets = functions
+  .runWith({ timeoutSeconds: 60, memory: "256MB" })
+  .https.onRequest((req, res) => {
+    corsForToilets(req, res, () => {
+      void (async () => {
+        if (req.method === "OPTIONS") {
+          res.status(204).end();
+          return;
+        }
+        if (req.method !== "GET") {
+          res.status(405).json({ ok: false, error: "請使用 GET" });
+          return;
+        }
 
-      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-        res.status(400).json({ ok: false, error: "需要有效的查詢參數 lat、lon（十進位經緯度）" });
-        return;
-      }
-      if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
-        res.status(400).json({ ok: false, error: "經緯度超出範圍" });
-        return;
-      }
-      if (!Number.isFinite(radius) || radius < 50) radius = 1000;
-      if (radius > 5000) radius = 5000;
+        const lat = parseFloat(req.query.lat);
+        const lon = parseFloat(req.query.lon);
+        let radius = parseInt(req.query.radius, 10);
 
-      try {
-        const data = await fetchOsmToiletsAround(lat, lon, radius);
-        const elements = data.elements || [];
-        const toilets = [];
-        for (const el of elements) {
-          const p = osmElementToPoint(el);
-          if (!p) continue;
-          const tags = el.tags || {};
-          const dist = haversineMeters(lat, lon, p.lat, p.lon);
-          toilets.push({
-            osmType: el.type,
-            osmId: el.id,
-            lat: p.lat,
-            lon: p.lon,
-            distanceMeters: Math.round(dist),
-            name: tags.name || tags.operator || "公共廁所",
-            fee: tags.fee ?? null,
-            wheelchair: tags.wheelchair ?? null,
-            openingHours: tags.opening_hours ?? null,
-            address:
-              [tags["addr:street"], tags["addr:housenumber"]].filter(Boolean).join(" ").trim() ||
-              null,
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+          res.status(400).json({ ok: false, error: "需要有效的查詢參數 lat、lon（十進位經緯度）" });
+          return;
+        }
+        if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+          res.status(400).json({ ok: false, error: "經緯度超出範圍" });
+          return;
+        }
+        if (!Number.isFinite(radius) || radius < 50) radius = 1000;
+        if (radius > 5000) radius = 5000;
+
+        try {
+          const data = await fetchOsmToiletsAround(lat, lon, radius);
+          const toilets = mapElementsToToilets(data.elements || [], lat, lon).filter(
+            (t) => t.distanceMeters <= radius
+          );
+
+          res.status(200).json({
+            ok: true,
+            source: data.source || "OpenStreetMap / Overpass API",
+            attribution: "資料 © OpenStreetMap 貢獻者，ODbL",
+            count: toilets.length,
+            lat,
+            lon,
+            radiusMeters: radius,
+            toilets,
+          });
+        } catch (error) {
+          console.error("nearbyToilets:", error);
+          res.status(500).json({
+            ok: false,
+            error: formatOverpassError(error),
           });
         }
-        toilets.sort((a, b) => a.distanceMeters - b.distanceMeters);
-
-        res.status(200).json({
-          ok: true,
-          source: "OpenStreetMap / Overpass API",
-          attribution: "資料 © OpenStreetMap 貢獻者，ODbL",
-          count: toilets.length,
-          lat,
-          lon,
-          radiusMeters: radius,
-          toilets,
-        });
-      } catch (error) {
-        console.error("nearbyToilets:", error);
-        res.status(500).json({
-          ok: false,
-          error: formatOverpassError(error),
-        });
-      }
-    })();
+      })();
+    });
   });
-});
