@@ -24,3 +24,7 @@ dist-ssr
 *.sw?
 
 .env
+
+# 內部文檔
+屎記文檔.txt
+屎記文檔v1.0.txt
