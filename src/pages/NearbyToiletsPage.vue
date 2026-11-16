@@ -25,8 +25,10 @@
                     <h2>{{ t.name }}</h2>
                     <p class="dist">約 {{ t.distanceMeters }} m</p>
                     <p v-if="t.address" class="meta">{{ t.address }}</p>
+                    <p v-if="t.grade" class="meta">評鑑：{{ t.grade }}</p>
                     <p v-if="t.openingHours" class="meta">營業／開放：{{ t.openingHours }}</p>
                     <p class="meta tags">
+                        <span v-if="t.type">{{ t.type }}</span>
                         <span v-if="t.fee">費用：{{ t.fee }}</span>
                         <span v-if="t.wheelchair">輪椅：{{ t.wheelchair }}</span>
                     </p>
@@ -42,10 +44,11 @@
             </li>
         </ul>
 
-        <p v-else-if="searched && !loading" class="empty">這個範圍內沒有查到 OSM 上的公共廁所，可加大半徑再試。</p>
+        <p v-else-if="searched && !loading" class="empty">這個範圍內沒有查到公共廁所，可加大半徑再試。</p>
 
         <p class="legal">
-            資料來自 <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>
+            資料來源：
+            <a href="https://data.gov.tw/dataset/30794" target="_blank" rel="noopener">環境部全國公廁建檔資料</a>
         </p>
     </div>
 </template>

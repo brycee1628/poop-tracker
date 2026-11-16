@@ -6,7 +6,7 @@ const cors = require("cors");
 admin.initializeApp();
 
 /** 與前端 package.json version 對齊；部署後可用 API / LINE「ver」確認 */
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.3.0";
 
 const corsForToilets = cors({ origin: true });
 
@@ -859,17 +859,51 @@ exports.backfillMonthlyHistory = functions.https.onRequest(async (req, res) => {
   }
 });
 
-// 公開 Overpass 常塞車；多鏡像並行 + 重試，失敗再改走 Nominatim
-const OVERPASS_ENDPOINTS = [
-  "https://overpass.private.coffee/api/interpreter",
-  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-  "https://lz4.overpass-api.de/api/interpreter",
-  "https://z.overpass-api.de/api/interpreter",
+// 方案 A：環境部全國公廁 + Cloud Function 記憶體快取（不寫入 RTDB）
+const MOENV_TOILETS_UA = "poop-tracker-nearbyToilets/1.3 (Firebase Function; MOENV FAC_P_07)";
+const MOENV_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+/** @type {Map<string, { at: number, items: Array }>} */
+const moenvCountyCache = new Map();
+/** @type {Map<string, Promise<Array>>} */
+const moenvCountyInflight = new Map();
+
+/** 粗略縣市框，用來決定要快取／查詢哪些縣市代碼 */
+const COUNTY_BOXES = [
+  { code: "63000", name: "臺北市", minLat: 24.95, maxLat: 25.22, minLon: 121.45, maxLon: 121.67 },
+  { code: "65000", name: "新北市", minLat: 24.67, maxLat: 25.32, minLon: 121.28, maxLon: 122.02 },
+  { code: "10017", name: "基隆市", minLat: 25.08, maxLat: 25.21, minLon: 121.65, maxLon: 121.83 },
+  { code: "68000", name: "桃園市", minLat: 24.82, maxLat: 25.13, minLon: 120.98, maxLon: 121.48 },
+  { code: "10018", name: "新竹市", minLat: 24.76, maxLat: 24.86, minLon: 120.90, maxLon: 121.04 },
+  { code: "10004", name: "新竹縣", minLat: 24.50, maxLat: 24.96, minLon: 120.90, maxLon: 121.40 },
+  { code: "10005", name: "苗栗縣", minLat: 24.25, maxLat: 24.75, minLon: 120.60, maxLon: 121.30 },
+  { code: "66000", name: "臺中市", minLat: 24.05, maxLat: 24.45, minLon: 120.45, maxLon: 121.45 },
+  { code: "10007", name: "彰化縣", minLat: 23.80, maxLat: 24.20, minLon: 120.30, maxLon: 120.75 },
+  { code: "10008", name: "南投縣", minLat: 23.45, maxLat: 24.20, minLon: 120.60, maxLon: 121.35 },
+  { code: "10009", name: "雲林縣", minLat: 23.50, maxLat: 23.90, minLon: 120.10, maxLon: 120.70 },
+  { code: "10020", name: "嘉義市", minLat: 23.44, maxLat: 23.52, minLon: 120.40, maxLon: 120.50 },
+  { code: "10010", name: "嘉義縣", minLat: 23.20, maxLat: 23.65, minLon: 120.10, maxLon: 120.80 },
+  { code: "67000", name: "臺南市", minLat: 22.85, maxLat: 23.45, minLon: 120.05, maxLon: 120.60 },
+  { code: "64000", name: "高雄市", minLat: 22.45, maxLat: 23.30, minLon: 120.15, maxLon: 121.05 },
+  { code: "10013", name: "屏東縣", minLat: 21.90, maxLat: 22.90, minLon: 120.35, maxLon: 120.95 },
+  { code: "10002", name: "宜蘭縣", minLat: 24.30, maxLat: 25.05, minLon: 121.30, maxLon: 122.00 },
+  { code: "10015", name: "花蓮縣", minLat: 22.70, maxLat: 24.40, minLon: 121.10, maxLon: 121.80 },
+  { code: "10014", name: "臺東縣", minLat: 22.00, maxLat: 23.50, minLon: 120.80, maxLon: 121.60 },
+  { code: "10016", name: "澎湖縣", minLat: 23.15, maxLat: 23.80, minLon: 119.40, maxLon: 119.75 },
+  { code: "09020", name: "金門縣", minLat: 24.30, maxLat: 24.55, minLon: 118.20, maxLon: 118.50 },
+  { code: "09007", name: "連江縣", minLat: 25.90, maxLat: 26.40, minLon: 119.85, maxLon: 120.10 },
 ];
 
-const OSM_USER_AGENT =
-  process.env.OVERPASS_USER_AGENT ||
-  "poop-tracker-nearbyToilets/1.0 (Firebase Function; OSM public toilets query)";
+function getMoenvApiKey() {
+  if (process.env.MOENV_API_KEY) return process.env.MOENV_API_KEY;
+  try {
+    const key = functions.config().moenv?.api_key;
+    if (key) return key;
+  } catch (error) {
+    // ignore missing functions config
+  }
+  // data.gov.tw 資料集頁公開的介接金鑰（非個人密鑰）；可改用環境變數覆寫
+  return "e75b1660-e564-4107-aad5-a8be1f905dd9";
+}
 
 function haversineMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000;
@@ -882,217 +916,171 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function overpassToiletsQuery(radius, lat, lon) {
-  // 多數公共廁所是 node；附帶 way 即可，略過 relation 以加快查詢
-  return `
-[out:json][timeout:20];
-(
-  node["amenity"="toilets"](around:${radius},${lat},${lon});
-  way["amenity"="toilets"](around:${radius},${lat},${lon});
-);
-out center;
-`.trim();
+function boxesOverlap(aMinLat, aMaxLat, aMinLon, aMaxLon, b) {
+  return !(aMaxLat < b.minLat || aMinLat > b.maxLat || aMaxLon < b.minLon || aMinLon > b.maxLon);
 }
 
-function osmElementToPoint(el) {
-  if (el.type === "node" && el.lat != null && el.lon != null) {
-    return { lat: el.lat, lon: el.lon };
-  }
-  if (el.center && el.center.lat != null && el.center.lon != null) {
-    return { lat: el.center.lat, lon: el.center.lon };
-  }
-  return null;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isOverpassBusyError(error) {
-  const msg = error?.message || String(error || "");
-  return /HTTP 502|HTTP 503|HTTP 504|HTTP 429|at capacity|queue is full|Gateway Timeout|too many requests/i.test(
-    msg
+function countiesForSearch(lat, lon, radiusM) {
+  const padLat = radiusM / 111320 + 0.01;
+  const padLon = radiusM / (111320 * Math.max(0.2, Math.cos((lat * Math.PI) / 180))) + 0.01;
+  const minLat = lat - padLat;
+  const maxLat = lat + padLat;
+  const minLon = lon - padLon;
+  const maxLon = lon + padLon;
+  const hits = COUNTY_BOXES.filter((b) => boxesOverlap(minLat, maxLat, minLon, maxLon, b)).map(
+    (b) => b.code
   );
+  if (hits.length) return hits;
+
+  // 落在框外時，改抓距離框中心最近的 1～2 個縣市
+  const ranked = COUNTY_BOXES.map((b) => {
+    const cLat = (b.minLat + b.maxLat) / 2;
+    const cLon = (b.minLon + b.maxLon) / 2;
+    return { code: b.code, dist: haversineMeters(lat, lon, cLat, cLon) };
+  }).sort((a, b) => a.dist - b.dist);
+  return ranked.slice(0, 2).map((x) => x.code);
 }
 
-function isTransientOverpassError(error) {
-  const msg = error?.message || String(error || "");
-  return (
-    isOverpassBusyError(error) ||
-    error?.name === "AbortError" ||
-    /aborted|AbortError|timeout|ETIMEDOUT|ECONNRESET|fetch failed/i.test(msg)
-  );
+function normalizeMoenvRow(row) {
+  const lat = parseFloat(row.latitude);
+  const lon = parseFloat(row.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (lat < 20 || lat > 27 || lon < 116 || lon > 123) return null;
+  return {
+    id: row.number || `${row.name}-${lat}-${lon}`,
+    name: row.name || "公共廁所",
+    address: row.address || null,
+    lat,
+    lon,
+    grade: row.grade || null,
+    type: row.type || null,
+    type2: row.type2 || null,
+  };
 }
 
-async function fetchFromOverpassEndpoint(endpoint, queryBody, ua, timeoutMs = 18000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const r = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
-        "User-Agent": ua,
-      },
-      body: queryBody,
-      signal: controller.signal,
-    });
-    if (!r.ok) {
-      const t = await r.text();
-      throw new Error(`Overpass HTTP ${r.status}: ${t.slice(0, 240)}`);
+async function fetchMoenvCountyPages(countyCode) {
+  const apiKey = getMoenvApiKey();
+  if (!apiKey) throw new Error("缺少環境部 API 金鑰");
+
+  const items = [];
+  let offset = 0;
+  const limit = 1000;
+
+  while (offset < 60000) {
+    const url = new URL("https://data.moenv.gov.tw/api/v2/fac_p_07");
+    url.searchParams.set("api_key", apiKey);
+    url.searchParams.set("format", "JSON");
+    url.searchParams.set("limit", String(limit));
+    url.searchParams.set("offset", String(offset));
+    url.searchParams.set("filters", `county,EQ,${countyCode}`);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+    let page;
+    try {
+      const r = await fetch(url.toString(), {
+        headers: {
+          Accept: "application/json",
+          "User-Agent": MOENV_TOILETS_UA,
+        },
+        signal: controller.signal,
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(`環境部公廁 API HTTP ${r.status}: ${t.slice(0, 200)}`);
+      }
+      page = await r.json();
+    } finally {
+      clearTimeout(timer);
     }
-    return r.json();
-  } finally {
-    clearTimeout(timer);
+
+    if (!Array.isArray(page)) {
+      throw new Error("環境部公廁 API 回傳格式異常");
+    }
+    for (const row of page) {
+      const item = normalizeMoenvRow(row);
+      if (item) items.push(item);
+    }
+    if (page.length < limit) break;
+    offset += limit;
   }
+
+  console.log(`🚽 MOENV 縣市 ${countyCode} 快取 ${items.length} 筆`);
+  return items;
 }
 
-function formatOverpassError(error) {
+async function getMoenvCountyToilets(countyCode) {
+  const hit = moenvCountyCache.get(countyCode);
+  if (hit && Date.now() - hit.at < MOENV_CACHE_TTL_MS) {
+    return hit.items;
+  }
+  if (moenvCountyInflight.has(countyCode)) {
+    return moenvCountyInflight.get(countyCode);
+  }
+
+  const job = fetchMoenvCountyPages(countyCode)
+    .then((items) => {
+      moenvCountyCache.set(countyCode, { at: Date.now(), items });
+      moenvCountyInflight.delete(countyCode);
+      return items;
+    })
+    .catch((error) => {
+      moenvCountyInflight.delete(countyCode);
+      throw error;
+    });
+
+  moenvCountyInflight.set(countyCode, job);
+  return job;
+}
+
+function formatToiletError(error) {
   const msg = error?.message || String(error || "");
-  if (
-    /附近廁所資料伺服器目前忙碌|附近廁所資料來源回應逾時|附近廁所查詢失敗/.test(msg)
-  ) {
-    return msg;
+  if (/附近廁所/.test(msg)) return msg;
+  if (error?.name === "AbortError" || /aborted|timeout/i.test(msg)) {
+    return "附近廁所資料來源回應逾時，請稍後再試。";
   }
-  if (isOverpassBusyError(error) || /capacity|queue is full|HTTP 502|HTTP 503|HTTP 504/i.test(msg)) {
-    return "附近廁所資料伺服器目前忙碌（Overpass 塞車），請稍後再按一次搜尋。";
-  }
-  if (error?.name === "AbortError" || /aborted|AbortError|timeout/i.test(msg)) {
-    return "附近廁所資料來源回應逾時，請稍後再試或改小搜尋半徑。";
+  if (/HTTP 429|HTTP 5\d\d/i.test(msg)) {
+    return "附近廁所資料伺服器目前忙碌，請稍後再試。";
   }
   return "附近廁所查詢失敗，請稍後再試。";
 }
 
-async function raceOverpassEndpoints(queryBody, ua, timeoutMs) {
-  return Promise.any(
-    OVERPASS_ENDPOINTS.map((endpoint) =>
-      fetchFromOverpassEndpoint(endpoint, queryBody, ua, timeoutMs).catch((error) => {
-        console.warn(`⚠️ Overpass 失敗 (${endpoint}):`, error.message || error);
-        throw error;
-      })
-    )
-  );
-}
+async function fetchNearbyMoenvToilets(lat, lon, radiusM) {
+  const counties = countiesForSearch(lat, lon, radiusM);
+  const lists = await Promise.all(counties.map((code) => getMoenvCountyToilets(code)));
+  const merged = lists.flat();
 
-function radiusToViewbox(lat, lon, radiusM) {
-  const dLat = radiusM / 111320;
-  const cosLat = Math.cos((lat * Math.PI) / 180);
-  const dLon = radiusM / (111320 * Math.max(0.2, cosLat));
-  // Nominatim viewbox: left,top,right,bottom
-  return `${lon - dLon},${lat + dLat},${lon + dLon},${lat - dLat}`;
-}
-
-/** Overpass 全掛時改走 Nominatim（較慢但較穩） */
-async function fetchToiletsFromNominatim(lat, lon, radiusM) {
-  const viewbox = radiusToViewbox(lat, lon, radiusM);
-  const url = new URL("https://nominatim.openstreetmap.org/search");
-  url.searchParams.set("format", "json");
-  url.searchParams.set("amenity", "toilets");
-  url.searchParams.set("limit", "40");
-  url.searchParams.set("bounded", "1");
-  url.searchParams.set("viewbox", viewbox);
-  url.searchParams.set("addressdetails", "0");
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12000);
-  try {
-    const r = await fetch(url.toString(), {
-      headers: {
-        Accept: "application/json",
-        "User-Agent": OSM_USER_AGENT,
-      },
-      signal: controller.signal,
-    });
-    if (!r.ok) {
-      const t = await r.text();
-      throw new Error(`Nominatim HTTP ${r.status}: ${t.slice(0, 200)}`);
-    }
-    const rows = await r.json();
-    if (!Array.isArray(rows)) {
-      throw new Error("Nominatim 回傳格式異常");
-    }
-    return {
-      elements: rows.map((row) => ({
-        type: row.osm_type || "node",
-        id: row.osm_id || row.place_id,
-        lat: parseFloat(row.lat),
-        lon: parseFloat(row.lon),
-        tags: {
-          name: row.name || "公共廁所",
-          "addr:full": row.display_name || null,
-        },
-      })),
-      source: "OpenStreetMap / Nominatim",
-    };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function fetchOsmToiletsAround(lat, lon, radiusM) {
-  const q = overpassToiletsQuery(radiusM, lat, lon);
-  const body = new URLSearchParams();
-  body.set("data", q);
-  const queryBody = body.toString();
-
-  let lastError = null;
-  // 第 1 次較短；塞車/逾時再加長重試 1 次
-  const attemptTimeouts = [12000, 20000];
-  for (let attempt = 0; attempt < attemptTimeouts.length; attempt += 1) {
-    if (attempt > 0) {
-      await sleep(700 * attempt);
-    }
-    try {
-      const data = await raceOverpassEndpoints(queryBody, OSM_USER_AGENT, attemptTimeouts[attempt]);
-      return { ...data, source: "OpenStreetMap / Overpass API" };
-    } catch (error) {
-      const errors = error?.errors?.filter(Boolean) || [error];
-      lastError = errors.find(Boolean) || error;
-      const retryable = errors.some((e) => isTransientOverpassError(e));
-      if (!retryable) break;
-    }
-  }
-
-  console.warn("⚠️ Overpass 全失敗，改走 Nominatim 備援:", lastError?.message || lastError);
-  try {
-    return await fetchToiletsFromNominatim(lat, lon, radiusM);
-  } catch (nominatimError) {
-    console.error("⚠️ Nominatim 備援也失敗:", nominatimError.message || nominatimError);
-    throw lastError || nominatimError;
-  }
-}
-
-function mapElementsToToilets(elements, lat, lon) {
   const toilets = [];
-  for (const el of elements) {
-    const p = osmElementToPoint(el);
-    if (!p || !Number.isFinite(p.lat) || !Number.isFinite(p.lon)) continue;
-    const tags = el.tags || {};
-    const dist = haversineMeters(lat, lon, p.lat, p.lon);
+  for (const item of merged) {
+    const dist = haversineMeters(lat, lon, item.lat, item.lon);
+    if (dist > radiusM) continue;
     toilets.push({
-      osmType: el.type,
-      osmId: el.id,
-      lat: p.lat,
-      lon: p.lon,
+      osmType: "moenv",
+      osmId: item.id,
+      lat: item.lat,
+      lon: item.lon,
       distanceMeters: Math.round(dist),
-      name: tags.name || tags.operator || "公共廁所",
-      fee: tags.fee ?? null,
-      wheelchair: tags.wheelchair ?? null,
-      openingHours: tags.opening_hours ?? null,
-      address:
-        tags["addr:full"] ||
-        [tags["addr:street"], tags["addr:housenumber"]].filter(Boolean).join(" ").trim() ||
-        null,
+      name: item.name,
+      address: item.address,
+      grade: item.grade,
+      type: item.type,
+      fee: null,
+      wheelchair: null,
+      openingHours: null,
     });
   }
   toilets.sort((a, b) => a.distanceMeters - b.distanceMeters);
-  return toilets;
+  return {
+    toilets,
+    counties,
+    source: "環境部全國公廁建檔資料",
+    attribution: "資料來源：環境部環境資料開放平臺 FAC_P_07",
+  };
 }
 
-/** 附近公共廁所（OpenStreetMap，經 Overpass / Nominatim 代理）GET ?lat=&lon=&radius= */
+/** 附近公共廁所（環境部開放資料 + 記憶體快取）GET ?lat=&lon=&radius= */
 exports.nearbyToilets = functions
-  .runWith({ timeoutSeconds: 60, memory: "256MB" })
+  .runWith({ timeoutSeconds: 60, memory: "512MB" })
   .https.onRequest((req, res) => {
     corsForToilets(req, res, () => {
       void (async () => {
@@ -1121,28 +1109,25 @@ exports.nearbyToilets = functions
         if (radius > 5000) radius = 5000;
 
         try {
-          const data = await fetchOsmToiletsAround(lat, lon, radius);
-          const toilets = mapElementsToToilets(data.elements || [], lat, lon).filter(
-            (t) => t.distanceMeters <= radius
-          );
-
+          const data = await fetchNearbyMoenvToilets(lat, lon, radius);
           res.status(200).json({
             ok: true,
             version: APP_VERSION,
-            source: data.source || "OpenStreetMap / Overpass API",
-            attribution: "資料 © OpenStreetMap 貢獻者，ODbL",
-            count: toilets.length,
+            source: data.source,
+            attribution: data.attribution,
+            counties: data.counties,
+            count: data.toilets.length,
             lat,
             lon,
             radiusMeters: radius,
-            toilets,
+            toilets: data.toilets,
           });
         } catch (error) {
           console.error("nearbyToilets:", error);
           res.status(500).json({
             ok: false,
             version: APP_VERSION,
-            error: formatOverpassError(error),
+            error: formatToiletError(error),
           });
         }
       })();
