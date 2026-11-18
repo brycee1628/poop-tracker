@@ -502,6 +502,29 @@ exports.lineWebhook = functions.https.onRequest(async (req, res) => {
 
         // 如果不是URL，才處理為宣言
         if (!isURLPattern) {
+          // 會員（已登入或已綁定）：宣言寫入自己的 poopCounterByUser/{uid}，網站個人頁讀的是這裡
+          const lineUserId = event?.source?.userId;
+          const lineBindingSnapshot = lineUserId
+            ? await db.ref(`lineUsers/${lineUserId}`).once("value")
+            : null;
+          const memberBinding = lineBindingSnapshot ? lineBindingSnapshot.val() : null;
+
+          if (memberBinding?.firebaseUid) {
+            // 不看輸入的名字，只能改自己的宣言，避免改到別人
+            const uidRef = db.ref(`poopCounterByUser/${memberBinding.firebaseUid}`);
+            const uidSnapshot = await uidRef.once("value");
+            const uidData = uidSnapshot.val();
+            const base = typeof uidData === "number" ? { count: uidData } : (uidData || {});
+            await uidRef.set({
+              ...base,
+              count: base.count || 0,
+              declaration: potentialDeclaration,
+            });
+            await notifyLineUser(event, `已更新你的宣言：${potentialDeclaration}`);
+            continue;
+          }
+
+          // 遊客：沿用原本依名字寫入 poopCounter
           // 更新用戶的宣告內容
           const userRef = db.ref(`poopCounter/${potentialName}`);
           const userSnapshot = await userRef.once("value");
