@@ -46,7 +46,7 @@ function createAuth(appInstance) {
 }
 
 const auth = createAuth(app);
-const lineProviderId = import.meta.env.VITE_LINE_PROVIDER_ID || "oidc.line";
+const lineProviderId = import.meta.env.VITE_LINE_PROVIDER_ID || "oidc.oidc.line";
 const lineProvider = new OAuthProvider(lineProviderId);
 
 const signInWithLinePopup = () => signInWithPopup(auth, lineProvider);
